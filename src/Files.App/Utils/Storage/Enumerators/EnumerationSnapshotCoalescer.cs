@@ -9,10 +9,10 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 {
 	private readonly object syncRoot = new();
 	private readonly Func<IReadOnlyList<T>, CancellationToken, Task> applyAsync;
-	private readonly Func<Func<Task>, Task> scheduleAsync;
+	private readonly IFolderSnapshotScheduler scheduler;
 	private readonly Action<Exception>? errorHandler;
 
-	private IReadOnlyList<T>? pendingSnapshot;
+	private IReadOnlyCollection<T>? pendingSnapshot;
 	private CancellationToken pendingCancellationToken;
 	private TaskCompletionSource<bool>? scheduledCompletion;
 	private bool callbackScheduled;
@@ -20,18 +20,18 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 
 	public EnumerationSnapshotCoalescer(
 		Func<IReadOnlyList<T>, CancellationToken, Task> applyAsync,
-		Func<Func<Task>, Task> scheduleAsync,
+		IFolderSnapshotScheduler scheduler,
 		Action<Exception>? errorHandler = null)
 	{
 		ArgumentNullException.ThrowIfNull(applyAsync);
-		ArgumentNullException.ThrowIfNull(scheduleAsync);
+		ArgumentNullException.ThrowIfNull(scheduler);
 
 		this.applyAsync = applyAsync;
-		this.scheduleAsync = scheduleAsync;
+		this.scheduler = scheduler;
 		this.errorHandler = errorHandler;
 	}
 
-	public void Submit(IReadOnlyList<T> snapshot, CancellationToken cancellationToken)
+	public void Submit(IReadOnlyCollection<T> snapshot, CancellationToken cancellationToken)
 	{
 		ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -42,7 +42,7 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			if (isCanceled || cancellationToken.IsCancellationRequested)
 				return;
 
-			pendingSnapshot = snapshot.ToArray();
+			pendingSnapshot = snapshot;
 			pendingCancellationToken = cancellationToken;
 
 			if (!callbackScheduled)
@@ -58,26 +58,56 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 
 	public void Cancel()
 	{
+		TaskCompletionSource<bool>? completion;
+
 		lock (syncRoot)
 		{
 			isCanceled = true;
 			pendingSnapshot = null;
+			callbackScheduled = false;
+			completion = scheduledCompletion;
+			scheduledCompletion = null;
 		}
+
+		completion?.TrySetResult(true);
 	}
 
-	public async Task DrainAsync(CancellationToken cancellationToken)
+	public async Task DrainAsync(CancellationToken cancellationToken, bool retryPendingSnapshot = false)
 	{
+		var retryAttempted = false;
+
 		while (true)
 		{
-			Task? completion;
+			Task? completion = null;
+			TaskCompletionSource<bool>? retryCompletion = null;
 
 			lock (syncRoot)
 			{
-				if (!callbackScheduled && pendingSnapshot is null)
-					return;
+				if (callbackScheduled)
+				{
+					completion = scheduledCompletion?.Task;
+				}
+				else if (!isCanceled && retryPendingSnapshot && !retryAttempted && pendingSnapshot is not null)
+				{
+					if (pendingCancellationToken.IsCancellationRequested)
+					{
+						pendingSnapshot = null;
+						return;
+					}
 
-				completion = scheduledCompletion?.Task;
+					retryAttempted = true;
+					callbackScheduled = true;
+					retryCompletion = scheduledCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+					completion = retryCompletion.Task;
+				}
+				else
+				{
+					return;
+				}
 			}
+
+			if (retryCompletion is not null)
+				_ = ScheduleCallbackAsync(retryCompletion);
 
 			if (completion is null)
 				return;
@@ -90,25 +120,28 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 	{
 		try
 		{
-			await scheduleAsync(() => ApplyScheduledSnapshotAsync(completion));
+			await scheduler.ScheduleAsync(() => ApplyScheduledSnapshotAsync(completion));
 		}
 		catch (Exception ex)
 		{
-			HandleError(ex);
+			bool canceled;
 
 			lock (syncRoot)
 			{
 				callbackScheduled = false;
-				pendingSnapshot = null;
+				canceled = isCanceled;
 			}
 
-			completion.TrySetResult(true);
+			if (!canceled)
+				HandleError(ex);
+
+			completion.TrySetResult(false);
 		}
 	}
 
 	private async Task ApplyScheduledSnapshotAsync(TaskCompletionSource<bool> completion)
 	{
-		IReadOnlyList<T>? snapshot;
+		IReadOnlyCollection<T>? snapshot;
 		CancellationToken cancellationToken;
 
 		lock (syncRoot)
@@ -118,17 +151,25 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			pendingSnapshot = null;
 		}
 
+		var applyFailed = false;
+
 		try
 		{
 			if (snapshot is not null && !cancellationToken.IsCancellationRequested && !isCanceled)
-				await applyAsync(snapshot, cancellationToken);
+				await applyAsync(snapshot as IReadOnlyList<T> ?? snapshot.ToArray(), cancellationToken);
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || isCanceled)
 		{
 		}
 		catch (Exception ex)
 		{
-			HandleError(ex);
+			lock (syncRoot)
+			{
+				applyFailed = !isCanceled;
+			}
+
+			if (applyFailed)
+				HandleError(ex);
 		}
 		finally
 		{
@@ -138,14 +179,20 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			{
 				callbackScheduled = false;
 
-				if (!isCanceled && pendingSnapshot is not null)
+				if (applyFailed && !isCanceled && snapshot is not null && pendingSnapshot is null)
+				{
+					pendingSnapshot = snapshot;
+					pendingCancellationToken = cancellationToken;
+				}
+
+				if (!isCanceled && pendingSnapshot is not null && (!applyFailed || !ReferenceEquals(pendingSnapshot, snapshot)))
 				{
 					callbackScheduled = true;
 					nextCompletion = scheduledCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				}
 			}
 
-			completion.TrySetResult(true);
+			completion.TrySetResult(!applyFailed);
 
 			if (nextCompletion is not null)
 				_ = ScheduleCallbackAsync(nextCompletion);

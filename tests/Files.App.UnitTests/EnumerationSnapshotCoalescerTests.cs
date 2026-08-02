@@ -56,6 +56,90 @@ public sealed class EnumerationSnapshotCoalescerTests
 	}
 
 	[TestMethod]
+	public async Task CanceledSnapshotTokenSkipsApplyWithoutReportingFailure()
+	{
+		var scheduler = new ManualScheduler();
+		var applied = new List<int[]>();
+		var failures = new List<Exception>();
+		using var cancellationSource = new CancellationTokenSource();
+		var coalescer = CreateCoalescer(scheduler, applied, failures.Add);
+
+		coalescer.Submit(new[] { 1 }, cancellationSource.Token);
+		cancellationSource.Cancel();
+		await scheduler.RunNextAsync();
+
+		Assert.AreEqual(0, applied.Count);
+		Assert.AreEqual(0, failures.Count);
+	}
+
+	[TestMethod]
+	public async Task SchedulerFailureCompletesDrainAndAllowsLaterSubmissionToRetry()
+	{
+		var scheduler = new RejectingScheduler();
+		var applied = new List<int[]>();
+		var failures = new List<Exception>();
+		var coalescer = CreateCoalescer(scheduler, applied, failures.Add);
+
+		coalescer.Submit(new[] { 1 }, CancellationToken.None);
+		await coalescer.DrainAsync(CancellationToken.None);
+
+		Assert.AreEqual(1, failures.Count);
+		Assert.AreEqual(0, applied.Count);
+
+		coalescer.Submit(new[] { 2 }, CancellationToken.None);
+		await scheduler.RunNextAsync();
+
+		CollectionAssert.AreEqual(new[] { 2 }, applied.Single());
+	}
+
+	[TestMethod]
+	public async Task FinalDrainRetriesApplyFailureOnce()
+	{
+		var scheduler = new ImmediateScheduler();
+		var applied = new List<int[]>();
+		var failures = new List<Exception>();
+		var failNext = true;
+		var coalescer = new EnumerationSnapshotCoalescer<int>(
+			(snapshot, _) =>
+			{
+				if (failNext)
+				{
+					failNext = false;
+					throw new InvalidOperationException("test failure");
+				}
+
+				applied.Add(snapshot.ToArray());
+				return Task.CompletedTask;
+			},
+			scheduler,
+			failures.Add);
+
+		coalescer.Submit(new[] { 1 }, CancellationToken.None);
+		await coalescer.DrainAsync(CancellationToken.None, retryPendingSnapshot: true);
+
+		Assert.AreEqual(1, failures.Count);
+		Assert.AreEqual(2, scheduler.ScheduleCount);
+		CollectionAssert.AreEqual(new[] { 1 }, applied.Single());
+	}
+
+	[TestMethod]
+	public async Task CancellationCompletesDrainWithoutApplyingSnapshot()
+	{
+		var scheduler = new ManualScheduler();
+		var applied = new List<int[]>();
+		var coalescer = CreateCoalescer(scheduler, applied);
+
+		coalescer.Submit(new[] { 1 }, CancellationToken.None);
+		var drain = coalescer.DrainAsync(CancellationToken.None);
+		coalescer.Cancel();
+
+		await drain;
+		await scheduler.RunNextAsync();
+
+		Assert.AreEqual(0, applied.Count);
+	}
+
+	[TestMethod]
 	public async Task ApplyFailureDoesNotLeaveCoalescerStuck()
 	{
 		var scheduler = new ManualScheduler();
@@ -74,7 +158,7 @@ public sealed class EnumerationSnapshotCoalescerTests
 				applied.Add(snapshot.ToArray());
 				return Task.CompletedTask;
 			},
-			callback => scheduler.ScheduleAsync(callback),
+			scheduler,
 			failures.Add);
 
 		coalescer.Submit(new[] { 1 }, CancellationToken.None);
@@ -86,7 +170,10 @@ public sealed class EnumerationSnapshotCoalescerTests
 		CollectionAssert.AreEqual(new[] { 2 }, applied.Single());
 	}
 
-	private static EnumerationSnapshotCoalescer<int> CreateCoalescer(ManualScheduler scheduler, List<int[]> applied)
+	private static EnumerationSnapshotCoalescer<int> CreateCoalescer(
+		IFolderSnapshotScheduler scheduler,
+		List<int[]> applied,
+		Action<Exception>? errorHandler = null)
 	{
 		return new EnumerationSnapshotCoalescer<int>(
 			(snapshot, _) =>
@@ -94,10 +181,11 @@ public sealed class EnumerationSnapshotCoalescerTests
 				applied.Add(snapshot.ToArray());
 				return Task.CompletedTask;
 			},
-			callback => scheduler.ScheduleAsync(callback));
+			scheduler,
+			errorHandler);
 	}
 
-	private sealed class ManualScheduler
+	private sealed class ManualScheduler : IFolderSnapshotScheduler
 	{
 		private readonly Queue<Func<Task>> callbacks = new();
 
@@ -125,6 +213,36 @@ public sealed class EnumerationSnapshotCoalescerTests
 				callback = callbacks.Dequeue();
 
 			await callback();
+		}
+	}
+
+	private sealed class RejectingScheduler : IFolderSnapshotScheduler
+	{
+		private readonly ManualScheduler fallback = new();
+		private bool hasRejected;
+
+		public Task ScheduleAsync(Func<Task> callback)
+		{
+			if (!hasRejected)
+			{
+				hasRejected = true;
+				throw new InvalidOperationException("test scheduler failure");
+			}
+
+			return fallback.ScheduleAsync(callback);
+		}
+
+		public Task RunNextAsync() => fallback.RunNextAsync();
+	}
+
+	private sealed class ImmediateScheduler : IFolderSnapshotScheduler
+	{
+		public int ScheduleCount { get; private set; }
+
+		public Task ScheduleAsync(Func<Task> callback)
+		{
+			ScheduleCount++;
+			return callback();
 		}
 	}
 }

@@ -2214,7 +2214,7 @@ namespace Files.App.ViewModels
 				{
 					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
 						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token),
-						callback => dispatcherQueue.EnqueueOrInvokeAsync(callback),
+						new DispatcherFolderSnapshotScheduler(dispatcherQueue),
 						exception => App.Logger.LogWarning(exception, "Win32 folder snapshot publication failed."));
 
 					try
