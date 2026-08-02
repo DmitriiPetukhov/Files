@@ -1,6 +1,7 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Services;
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,7 @@ namespace Files.App.Utils.Storage
 	{
 		private static readonly ISizeProvider folderSizeProvider = Ioc.Default.GetService<ISizeProvider>();
 
-		private static readonly IIconCacheService iconCacheService = Ioc.Default.GetRequiredService<IIconCacheService>();
+		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
 
 		public static async Task<List<ListedItem>> ListEntries(
 			BaseStorageFolder rootFolder,
@@ -90,12 +91,7 @@ namespace Files.App.Utils.Storage
 							var folder = await AddFolderAsync(item.AsBaseStorageFolder(), currentStorageFolder, cancellationToken);
 							if (folder is not null)
 							{
-								folder.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(folder.ItemPath, null, true));
-
-								if (defaultIconPairs?.ContainsKey(string.Empty) ?? false)
-									folder.FileImage = defaultIconPairs[string.Empty];
-
-								tempList.Add(folder);
+								PublishFolderItem(iconWarmUpQueue, folder, tempList, cancellationToken, defaultIconPairs);
 
 								// The size provider enumerates with Win32, which reports size 0 for
 								// virtual paths (ftp, archives) it cannot traverse; skip those
@@ -116,20 +112,7 @@ namespace Files.App.Utils.Storage
 							var fileEntry = await AddFileAsync(item.AsBaseStorageFile(), currentStorageFolder, cancellationToken);
 							if (fileEntry is not null)
 							{
-								fileEntry.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(fileEntry.ItemPath, fileEntry.FileExtension, false));
-
-								if (defaultIconPairs is not null)
-								{
-									if (!string.IsNullOrEmpty(fileEntry.FileExtension))
-									{
-										var lowercaseExtension = fileEntry.FileExtension.ToLowerInvariant();
-
-										if (defaultIconPairs.TryGetValue(lowercaseExtension, out BitmapImage? image))
-											fileEntry.FileImage = image;
-									}
-								}
-
-								tempList.Add(fileEntry);
+								PublishFileItem(iconWarmUpQueue, fileEntry, tempList, cancellationToken, defaultIconPairs);
 							}
 						}
 					}
@@ -153,6 +136,51 @@ namespace Files.App.Utils.Storage
 			}
 
 			return tempList;
+		}
+
+		internal static void PublishFolderItem(
+			IconWarmUpQueue queue,
+			ListedItem folder,
+			List<ListedItem> items,
+			CancellationToken cancellationToken,
+			Dictionary<string, BitmapImage> defaultIconPairs)
+		{
+			if (defaultIconPairs?.ContainsKey(string.Empty) ?? false)
+				folder.FileImage = defaultIconPairs[string.Empty];
+
+			QueueIconWarmUp(queue, folder, isFolderFromEnumeration: true, cancellationToken);
+			items.Add(folder);
+		}
+
+		internal static void PublishFileItem(
+			IconWarmUpQueue queue,
+			ListedItem file,
+			List<ListedItem> items,
+			CancellationToken cancellationToken,
+			Dictionary<string, BitmapImage> defaultIconPairs)
+		{
+			if (defaultIconPairs is not null && !string.IsNullOrEmpty(file.FileExtension))
+			{
+				var lowercaseExtension = file.FileExtension.ToLowerInvariant();
+
+				if (defaultIconPairs.TryGetValue(lowercaseExtension, out BitmapImage? image))
+					file.FileImage = image;
+			}
+
+			QueueIconWarmUp(queue, file, isFolderFromEnumeration: false, cancellationToken);
+			items.Add(file);
+		}
+
+		internal static void QueueIconWarmUp(
+			IconWarmUpQueue queue,
+			ListedItem item,
+			bool isFolderFromEnumeration,
+			CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(queue);
+			ArgumentNullException.ThrowIfNull(item);
+
+			queue.TryQueue(item, isFolderFromEnumeration, cancellationToken);
 		}
 
 		private static async Task<IReadOnlyList<IStorageItem>> EnumerateFileByFile(BaseStorageFolder rootFolder, uint startFrom, uint itemsToIterate)
