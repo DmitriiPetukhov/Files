@@ -13,6 +13,17 @@ namespace Files.App.Services
 
 		private readonly ConcurrentDictionary<string, Lazy<Task<byte[]?>>> _cache = new();
 		private readonly SemaphoreSlim _iconLoadSemaphore = new(4);
+		private readonly IIconLoader iconLoader;
+
+		public IconCacheService()
+			: this(new FileThumbnailIconLoader())
+		{
+		}
+
+		internal IconCacheService(IIconLoader iconLoader)
+		{
+			this.iconLoader = iconLoader ?? throw new ArgumentNullException(nameof(iconLoader));
+		}
 
 		public Task<byte[]?> GetIconAsync(string itemPath, string? extension, bool isFolder)
 		{
@@ -47,11 +58,7 @@ namespace Files.App.Services
 				// Always use the dummy path so the shell resolves the generic type icon from the
 				// extension alone. This works correctly for all path types (local, MTP, FTP, network,
 				// cloud, etc.) because the cache is keyed by extension anyway, not by item identity.
-				return await FileThumbnailHelper.GetIconAsync(
-					iconPath,
-					Constants.ShellIconSizes.Jumbo,
-					isFolder,
-					IconOptions.ReturnIconOnly).ConfigureAwait(false);
+				return await iconLoader.LoadAsync(iconPath, isFolder).ConfigureAwait(false);
 			}
 			finally
 			{
