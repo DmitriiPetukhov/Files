@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Files.App.Data.Contracts;
 using Files.App.Services;
 using Files.App.Utils;
+using Files.App.Utils.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -49,13 +50,26 @@ public sealed class IconWarmUpQueueTests
 		var cache = new RecordingIconCacheService();
 		await using var queue = new IconWarmUpQueue(cache, NullLogger<IconWarmUpQueue>.Instance, capacity: 4, workerCount: 1);
 
-		queue.TryQueue(CreateItem(), isFolderFromEnumeration: false, CancellationToken.None);
-		queue.TryQueue(CreateItem(), isFolderFromEnumeration: true, CancellationToken.None);
+		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), isFolderFromEnumeration: false, CancellationToken.None);
+		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), isFolderFromEnumeration: true, CancellationToken.None);
 
 		await cache.Processed.Task.WaitAsync(TimeSpan.FromSeconds(5));
 		Assert.AreEqual(2, cache.IsFolderArguments.Count);
 		Assert.IsFalse(cache.IsFolderArguments[0]);
 		Assert.IsTrue(cache.IsFolderArguments[1]);
+	}
+
+	[TestMethod]
+	public async Task UniversalEnumeratorBoundary_QueuesWithoutWaitingForIcon()
+	{
+		var cache = new BlockingIconCacheService();
+		await using var queue = new IconWarmUpQueue(cache, NullLogger<IconWarmUpQueue>.Instance, capacity: 1, workerCount: 1);
+
+		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), false, CancellationToken.None);
+
+		await cache.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		cache.Complete();
+		await cache.Returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
 	}
 
 	[TestMethod]

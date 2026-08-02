@@ -1,6 +1,7 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Services;
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,7 @@ namespace Files.App.Utils.Storage
 	{
 		private static readonly ISizeProvider folderSizeProvider = Ioc.Default.GetService<ISizeProvider>();
 
-		private static readonly IIconCacheService iconCacheService = Ioc.Default.GetRequiredService<IIconCacheService>();
+		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
 
 		public static async Task<List<ListedItem>> ListEntries(
 			BaseStorageFolder rootFolder,
@@ -90,11 +91,10 @@ namespace Files.App.Utils.Storage
 							var folder = await AddFolderAsync(item.AsBaseStorageFolder(), currentStorageFolder, cancellationToken);
 							if (folder is not null)
 							{
-								folder.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(folder.ItemPath, null, true));
-
 								if (defaultIconPairs?.ContainsKey(string.Empty) ?? false)
 									folder.FileImage = defaultIconPairs[string.Empty];
 
+								QueueIconWarmUp(iconWarmUpQueue, folder, isFolderFromEnumeration: true, cancellationToken);
 								tempList.Add(folder);
 
 								// The size provider enumerates with Win32, which reports size 0 for
@@ -116,8 +116,6 @@ namespace Files.App.Utils.Storage
 							var fileEntry = await AddFileAsync(item.AsBaseStorageFile(), currentStorageFolder, cancellationToken);
 							if (fileEntry is not null)
 							{
-								fileEntry.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(fileEntry.ItemPath, fileEntry.FileExtension, false));
-
 								if (defaultIconPairs is not null)
 								{
 									if (!string.IsNullOrEmpty(fileEntry.FileExtension))
@@ -129,6 +127,7 @@ namespace Files.App.Utils.Storage
 									}
 								}
 
+								QueueIconWarmUp(iconWarmUpQueue, fileEntry, isFolderFromEnumeration: false, cancellationToken);
 								tempList.Add(fileEntry);
 							}
 						}
@@ -153,6 +152,18 @@ namespace Files.App.Utils.Storage
 			}
 
 			return tempList;
+		}
+
+		internal static void QueueIconWarmUp(
+			IconWarmUpQueue queue,
+			ListedItem item,
+			bool isFolderFromEnumeration,
+			CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(queue);
+			ArgumentNullException.ThrowIfNull(item);
+
+			queue.TryQueue(item, isFolderFromEnumeration, cancellationToken);
 		}
 
 		private static async Task<IReadOnlyList<IStorageItem>> EnumerateFileByFile(BaseStorageFolder rootFolder, uint startFrom, uint itemsToIterate)
