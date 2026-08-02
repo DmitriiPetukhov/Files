@@ -263,7 +263,9 @@ namespace Files.App.Helpers
 					.AddSingleton<IStartMenuService, StartMenuService>()
 					.AddSingleton<IStorageCacheService, StorageCacheService>()
 					.AddSingleton<IIconCacheService, IconCacheService>()
-					.AddSingleton<IconWarmUpQueue>()
+					.AddSingleton<IconWarmUpQueue>(serviceProvider => new IconWarmUpQueue(
+						serviceProvider.GetRequiredService<IIconCacheService>(),
+						serviceProvider.GetRequiredService<ILogger<IconWarmUpQueue>>()))
 					.AddSingleton<IStorageArchiveService, StorageArchiveService>()
 					.AddSingleton<IStorageSecurityService, StorageSecurityService>()
 					.AddSingleton<IWindowsCompatibilityService, WindowsCompatibilityService>()
