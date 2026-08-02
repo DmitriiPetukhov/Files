@@ -55,7 +55,7 @@ namespace Files.App.Utils.Storage
 						var file = await GetFile(findData, path, isGitRepo, cancellationToken);
 						if (file is not null)
 						{
-							file.PreloadedIconData = await iconCacheService.GetIconAsync(file.ItemPath, file.FileExtension, false);
+							file.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(file.ItemPath, file.FileExtension, false));
 							tempList.Add(file);
 							++count;
 
@@ -72,7 +72,7 @@ namespace Files.App.Utils.Storage
 							var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
 							if (folder is not null)
 							{
-								folder.PreloadedIconData = await iconCacheService.GetIconAsync(folder.ItemPath, null, true);
+								folder.TrySetPreloadedIconData(await iconCacheService.GetIconAsync(folder.ItemPath, null, true));
 								tempList.Add(folder);
 								++count;
 
