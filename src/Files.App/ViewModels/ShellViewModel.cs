@@ -3,6 +3,7 @@
 
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
+using CommunityToolkit.WinUI;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -1050,13 +1051,16 @@ namespace Files.App.ViewModels
 			return ApplyFilesAndFoldersSnapshotAsync(snapshot, cancellationToken);
 		}
 
-		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken)
+		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
 		{
 			try
 			{
 				if (snapshot.Count == 0)
 				{
-					await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplayOnUi);
+					if (propagateExceptions)
+						await dispatcherQueue.EnqueueAsync(ClearDisplayOnUi);
+					else
+						await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplayOnUi);
 
 					return;
 				}
@@ -1077,7 +1081,7 @@ namespace Files.App.ViewModels
 				var isSemaphoreReleased = false;
 				try
 				{
-					await dispatcherQueue.EnqueueOrInvokeAsync(() =>
+					void ApplySnapshotOnUi()
 					{
 						try
 						{
@@ -1088,7 +1092,12 @@ namespace Files.App.ViewModels
 							isSemaphoreReleased = true;
 							bulkOperationSemaphore.Release();
 						}
-					});
+					}
+
+					if (propagateExceptions)
+						await dispatcherQueue.EnqueueAsync(ApplySnapshotOnUi);
+					else
+						await dispatcherQueue.EnqueueOrInvokeAsync(ApplySnapshotOnUi);
 
 					// The semaphore will be released in UI thread
 					isSemaphoreReleased = true;
@@ -1101,6 +1110,9 @@ namespace Files.App.ViewModels
 			}
 			catch (Exception ex)
 			{
+				if (propagateExceptions)
+					throw;
+
 				App.Logger.LogWarning(ex, ex.Message);
 			}
 		}
@@ -2212,8 +2224,13 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
+					var publicationSession = new Win32FolderPublicationSession<ListedItem>(SortingHelper.GetComparer(
+						folderSettings.DirectorySortOption,
+						folderSettings.DirectorySortDirection,
+						folderSettings.SortDirectoriesAlongsideFiles,
+						folderSettings.SortFilesFirst));
 					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
-						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token),
+						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token, propagateExceptions: true),
 						new DispatcherFolderSnapshotScheduler(dispatcherQueue),
 						exception => App.Logger.LogWarning(exception, "Win32 folder snapshot publication failed."));
 
@@ -2221,19 +2238,21 @@ namespace Files.App.ViewModels
 					{
 						await Task.Run(async () =>
 						{
-							List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: async (intermediateList) =>
+							List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: (intermediateList) =>
 							{
-								filesAndFolders.AddRange(intermediateList);
-								await OrderFilesAndFoldersAsync();
-								snapshotCoalescer.Submit(filesAndFolders.ToList(), cancellationToken);
+								if (publicationSession.TryAppend(intermediateList, cancellationToken, out var snapshot))
+									snapshotCoalescer.Submit(snapshot!, cancellationToken);
+
+								return Task.CompletedTask;
 							});
 
-							filesAndFolders.Clear();
-							filesAndFolders.AddRange(fileList);
+							if (publicationSession.TryReplaceFinal(fileList, cancellationToken, out var finalSnapshot))
+							{
+								filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);
+								snapshotCoalescer.Submit(finalSnapshot, cancellationToken);
+							}
 
-							await OrderFilesAndFoldersAsync();
-							snapshotCoalescer.Submit(filesAndFolders.ToList(), cancellationToken);
-							await snapshotCoalescer.DrainAsync(cancellationToken);
+							await snapshotCoalescer.DrainAsync(cancellationToken, retryPendingSnapshot: true);
 						}, cancellationToken);
 
 						// Not awaited here: with Low priority these don't run until the UI thread goes idle
@@ -2250,6 +2269,7 @@ namespace Files.App.ViewModels
 					}
 					finally
 					{
+						publicationSession.Cancel();
 						snapshotCoalescer.Cancel();
 					}
 

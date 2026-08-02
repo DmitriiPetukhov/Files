@@ -1,6 +1,7 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using System.Runtime.CompilerServices;
 using Windows.Storage;
 
 namespace Files.App.Utils.Storage
@@ -31,65 +32,96 @@ namespace Files.App.Utils.Storage
 		public static IEnumerable<ListedItem> OrderFileList(IList<ListedItem> filesAndFolders, SortOption directorySortOption, SortDirection directorySortDirection,
 			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
 		{
-			var orderFunc = GetSortFunc(directorySortOption);
-			var naturalStringComparer = NaturalStringComparer.GetForProcessor();
+			return filesAndFolders.OrderBy(item => item, GetComparer(directorySortOption, directorySortDirection,
+				sortDirectoriesAlongsideFiles, sortFilesFirst));
+		}
 
-			// Function to prioritize folders (if sortFilesFirst is false) or files (if sortFilesFirst is true)
-			bool PrioritizeFilesOrFolders(ListedItem listedItem)
+		public static IComparer<ListedItem> GetComparer(SortOption directorySortOption, SortDirection directorySortDirection,
+			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
+		{
+			return new ListedItemComparer(directorySortOption, directorySortDirection, sortDirectoriesAlongsideFiles, sortFilesFirst);
+		}
+
+		private sealed class ListedItemComparer : IComparer<ListedItem>
+		{
+			private readonly Func<ListedItem, object> orderFunc;
+			private readonly IComparer<object> naturalStringComparer = NaturalStringComparer.GetForProcessor();
+			private readonly SortOption directorySortOption;
+			private readonly int directionMultiplier;
+			private readonly bool sortDirectoriesAlongsideFiles;
+			private readonly bool sortFilesFirst;
+
+			public ListedItemComparer(SortOption directorySortOption, SortDirection directorySortDirection,
+				bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
+			{
+				this.directorySortOption = directorySortOption;
+				this.sortDirectoriesAlongsideFiles = sortDirectoriesAlongsideFiles;
+				this.sortFilesFirst = sortFilesFirst;
+				this.directionMultiplier = directorySortDirection == SortDirection.Ascending ? 1 : -1;
+				orderFunc = GetSortFunc(directorySortOption);
+			}
+
+			public int Compare(ListedItem? x, ListedItem? y)
+			{
+				if (ReferenceEquals(x, y))
+					return 0;
+
+				if (x is null)
+					return -1;
+
+				if (y is null)
+					return 1;
+
+				if (!sortDirectoriesAlongsideFiles)
+				{
+					var priorityComparison = CompareAscending(PrioritizeFilesOrFolders(x), PrioritizeFilesOrFolders(y));
+					if (priorityComparison != 0)
+						return priorityComparison;
+				}
+
+				if (directorySortOption == SortOption.FileTag)
+				{
+					var emptyTagComparison = CompareAscending(string.IsNullOrEmpty(orderFunc(x) as string), string.IsNullOrEmpty(orderFunc(y) as string));
+					if (emptyTagComparison != 0)
+						return emptyTagComparison;
+				}
+
+				var sortComparison = Comparer<object>.Default.Compare(orderFunc(x), orderFunc(y)) * directionMultiplier;
+				if (sortComparison != 0)
+					return sortComparison;
+
+				if (directorySortOption != SortOption.Name)
+				{
+					var nameComparison = naturalStringComparer.Compare(OrderByNameFunc(x), OrderByNameFunc(y)) * directionMultiplier;
+					if (nameComparison != 0)
+						return nameComparison;
+				}
+
+				return CompareIdentity(x, y);
+			}
+
+			private bool PrioritizeFilesOrFolders(ListedItem listedItem)
 				=> (listedItem.PrimaryItemAttribute == StorageItemTypes.File || listedItem.IsShortcut || listedItem.IsArchive) ^ sortFilesFirst;
 
-			IOrderedEnumerable<ListedItem> ordered;
+			private static int CompareAscending(bool x, bool y)
+				=> x.CompareTo(y);
 
-			if (directorySortDirection == SortDirection.Ascending)
+			private static int CompareIdentity(ListedItem x, ListedItem y)
 			{
-				ordered = directorySortOption switch
-				{
-					SortOption.Name => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderBy(orderFunc, naturalStringComparer)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders).ThenBy(orderFunc, naturalStringComparer),
+				var comparison = StringComparer.OrdinalIgnoreCase.Compare(x.ItemPath, y.ItemPath);
+				if (comparison != 0)
+					return comparison;
 
-					SortOption.FileTag => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderBy(x => string.IsNullOrEmpty(orderFunc(x) as string)).ThenBy(orderFunc)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders)
-							.ThenBy(x => string.IsNullOrEmpty(orderFunc(x) as string))
-							.ThenBy(orderFunc),
+				comparison = StringComparer.Ordinal.Compare(x.ItemPath, y.ItemPath);
+				if (comparison != 0)
+					return comparison;
 
-					_ => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderBy(orderFunc)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders).ThenBy(orderFunc)
-				};
+				comparison = StringComparer.Ordinal.Compare(x.GetType().FullName, y.GetType().FullName);
+				if (comparison != 0)
+					return comparison;
+
+				return RuntimeHelpers.GetHashCode(x).CompareTo(RuntimeHelpers.GetHashCode(y));
 			}
-			else
-			{
-				ordered = directorySortOption switch
-				{
-					SortOption.Name => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderByDescending(orderFunc, naturalStringComparer)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders)
-							.ThenByDescending(orderFunc, naturalStringComparer),
-
-					SortOption.FileTag => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderBy(x => string.IsNullOrEmpty(orderFunc(x) as string))
-							.ThenByDescending(orderFunc)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders)
-							.ThenBy(x => string.IsNullOrEmpty(orderFunc(x) as string))
-							.ThenByDescending(orderFunc),
-
-					_ => sortDirectoriesAlongsideFiles
-						? filesAndFolders.OrderByDescending(orderFunc)
-						: filesAndFolders.OrderBy(PrioritizeFilesOrFolders).ThenByDescending(orderFunc)
-				};
-			}
-
-			// Further order by name if applicable
-			if (directorySortOption != SortOption.Name)
-			{
-				ordered = directorySortDirection == SortDirection.Ascending
-					? ordered.ThenBy(OrderByNameFunc, naturalStringComparer)
-					: ordered.ThenByDescending(OrderByNameFunc, naturalStringComparer);
-			}
-
-			return ordered;
 		}
 	}
 }
