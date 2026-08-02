@@ -2228,6 +2228,7 @@ namespace Files.App.ViewModels
 								snapshotCoalescer.Submit(filesAndFolders.ToList(), cancellationToken);
 							});
 
+							filesAndFolders.Clear();
 							filesAndFolders.AddRange(fileList);
 
 							await OrderFilesAndFoldersAsync();

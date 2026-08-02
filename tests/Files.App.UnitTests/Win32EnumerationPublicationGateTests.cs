@@ -25,6 +25,45 @@ public sealed class Win32EnumerationPublicationGateTests
 	}
 
 	[TestMethod]
+	public async Task PublishesSubsequentBatchWhenThirtyTwoPrimaryItemsAreReady()
+	{
+		var published = new List<int[]>();
+		var gate = CreateGate(published);
+
+		for (var item = 1; item <= 8; item++)
+			await gate.AddAsync(item, CancellationToken.None);
+
+		for (var item = 9; item <= 39; item++)
+			await gate.AddAsync(item, CancellationToken.None);
+
+		Assert.AreEqual(1, published.Count);
+
+		await gate.AddAsync(40, CancellationToken.None);
+
+		Assert.AreEqual(2, published.Count);
+		CollectionAssert.AreEqual(Enumerable.Range(9, 32).ToArray(), published[1]);
+	}
+
+	[TestMethod]
+	public async Task AlternateStreamsDoNotAdvancePrimaryThresholds()
+	{
+		var published = new List<int[]>();
+		var gate = CreateGate(published);
+
+		for (var item = 1; item <= 7; item++)
+			await gate.AddAsync(item, CancellationToken.None);
+
+		await gate.AddAsync(100, countsTowardThreshold: false, CancellationToken.None);
+
+		Assert.AreEqual(0, published.Count);
+
+		await gate.AddAsync(8, CancellationToken.None);
+
+		Assert.AreEqual(1, published.Count);
+		CollectionAssert.AreEqual(new[] { 1, 2, 3, 4, 5, 6, 7, 100, 8 }, published[0]);
+	}
+
+	[TestMethod]
 	public async Task PublishesNonEmptyPartialBatchWhenTimerExpires()
 	{
 		var published = new List<int[]>();
@@ -122,6 +161,32 @@ public sealed class Win32EnumerationPublicationGateTests
 
 		CollectionAssert.AreEqual(Enumerable.Range(1, 8).ToArray(), published[0]);
 		CollectionAssert.AreEqual(new[] { 9 }, published[1]);
+	}
+
+	[TestMethod]
+	public async Task CancellationWaitsForInFlightPublication()
+	{
+		var firstPublicationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var releaseFirstPublication = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var gate = new Win32EnumerationPublicationGate<int>(
+			async _ =>
+			{
+				firstPublicationStarted.TrySetResult(true);
+				await releaseFirstPublication.Task;
+			},
+			initialBatchSize: 8,
+			intermediateBatchSize: 32,
+			batchTimeout: TimeSpan.FromMilliseconds(500));
+
+		var firstFlush = Task.WhenAll(Enumerable.Range(1, 8).Select(item => gate.AddAsync(item, CancellationToken.None)));
+		await firstPublicationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+		var cancellation = gate.CancelAsync();
+		Assert.IsFalse(cancellation.IsCompleted);
+
+		releaseFirstPublication.TrySetResult(true);
+		await cancellation;
+		await firstFlush;
 	}
 
 	private static Win32EnumerationPublicationGate<int> CreateGate(

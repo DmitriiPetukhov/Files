@@ -30,7 +30,7 @@ namespace Files.App.Utils.Storage
 			Func<List<ListedItem>, Task> intermediateAction
 		)
 		{
-			var tempList = new List<ListedItem>();
+			var finalItems = new List<ListedItem>();
 			var count = 0;
 			Win32EnumerationPublicationGate<ListedItem>? publicationGate = intermediateAction is null
 				? null
@@ -38,14 +38,15 @@ namespace Files.App.Utils.Storage
 					batch => intermediateAction(new List<ListedItem>(batch)),
 					InitialPublicationBatchSize,
 					IntermediatePublicationBatchSize,
-					publicationBatchTimeout);
+					publicationBatchTimeout,
+					publicationCancellationToken: cancellationToken);
 
-			async Task AddItemAsync(ListedItem item)
+			async Task AddItemAsync(ListedItem item, bool countsTowardThreshold = true)
 			{
-				if (publicationGate is null)
-					tempList.Add(item);
-				else
-					await publicationGate.AddAsync(item, cancellationToken);
+				finalItems.Add(item);
+
+				if (publicationGate is not null)
+					await publicationGate.AddAsync(item, countsTowardThreshold, cancellationToken);
 			}
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
@@ -82,7 +83,7 @@ namespace Files.App.Utils.Storage
 								if (areAlternateStreamsVisible)
 								{
 									foreach (var adsItem in EnumAdsForPath(file.ItemPath, file))
-										await AddItemAsync(adsItem);
+										await AddItemAsync(adsItem, countsTowardThreshold: false);
 								}
 							}
 						}
@@ -101,7 +102,7 @@ namespace Files.App.Utils.Storage
 									if (areAlternateStreamsVisible)
 									{
 										foreach (var adsItem in EnumAdsForPath(folder.ItemPath, folder))
-											await AddItemAsync(adsItem);
+											await AddItemAsync(adsItem, countsTowardThreshold: false);
 									}
 
 									if (CalculateFolderSizes)
@@ -127,7 +128,7 @@ namespace Files.App.Utils.Storage
 				if (publicationGate is not null)
 					await publicationGate.CompleteAsync(cancellationToken);
 
-				return tempList;
+				return finalItems;
 			}
 			finally
 			{

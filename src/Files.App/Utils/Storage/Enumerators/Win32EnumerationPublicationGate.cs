@@ -12,11 +12,13 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 	private readonly Func<IReadOnlyList<T>, Task> publishAsync;
 	private readonly Func<TimeSpan, CancellationToken, Task> delayAsync;
 	private readonly Action<Exception>? errorHandler;
+	private readonly CancellationToken publicationCancellationToken;
 	private readonly int initialBatchSize;
 	private readonly int intermediateBatchSize;
 	private readonly TimeSpan batchTimeout;
 
 	private List<T> pendingItems = new();
+	private int pendingPrimaryItemCount;
 	private CancellationTokenSource? batchTimerCancellation;
 	private bool hasPublishedFirstBatch;
 	private bool isCompleted;
@@ -28,7 +30,8 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 		int intermediateBatchSize,
 		TimeSpan batchTimeout,
 		Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-		Action<Exception>? errorHandler = null)
+		Action<Exception>? errorHandler = null,
+		CancellationToken publicationCancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(publishAsync);
 		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(initialBatchSize);
@@ -41,9 +44,13 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 		this.batchTimeout = batchTimeout;
 		this.delayAsync = delayAsync ?? Task.Delay;
 		this.errorHandler = errorHandler;
+		this.publicationCancellationToken = publicationCancellationToken;
 	}
 
 	public Task AddAsync(T item, CancellationToken cancellationToken)
+		=> AddAsync(item, countsTowardThreshold: true, cancellationToken);
+
+	public Task AddAsync(T item, bool countsTowardThreshold, CancellationToken cancellationToken)
 	{
 		List<T>? batchToPublish = null;
 
@@ -53,10 +60,13 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 			cancellationToken.ThrowIfCancellationRequested();
 
 			pendingItems.Add(item);
+			if (countsTowardThreshold)
+				pendingPrimaryItemCount++;
+
 			StartTimerIfNeededLocked();
 
 			var batchSize = hasPublishedFirstBatch ? intermediateBatchSize : initialBatchSize;
-			if (pendingItems.Count >= batchSize)
+			if (pendingPrimaryItemCount >= batchSize)
 				batchToPublish = DetachBatchLocked();
 		}
 
@@ -69,6 +79,9 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 
 		lock (syncRoot)
 		{
+			if (isCanceled || cancellationToken.IsCancellationRequested)
+				return Task.CompletedTask;
+
 			batchToPublish = DetachBatchLocked();
 		}
 
@@ -81,7 +94,7 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 
 		lock (syncRoot)
 		{
-			if (isCanceled)
+			if (isCanceled || cancellationToken.IsCancellationRequested)
 				return Task.CompletedTask;
 
 			isCompleted = true;
@@ -91,12 +104,12 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 		return PublishBatchAsync(batchToPublish, cancellationToken);
 	}
 
-	public Task CancelAsync()
+	public async Task CancelAsync()
 	{
 		lock (syncRoot)
 		{
 			if (isCanceled)
-				return Task.CompletedTask;
+				return;
 
 			isCanceled = true;
 			isCompleted = true;
@@ -104,7 +117,8 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 			CancelTimerLocked();
 		}
 
-		return Task.CompletedTask;
+		await publicationSemaphore.WaitAsync();
+		publicationSemaphore.Release();
 	}
 
 	public async ValueTask DisposeAsync()
@@ -127,7 +141,7 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 		try
 		{
 			await delayAsync(batchTimeout, cancellationToken);
-			await FlushAsync(CancellationToken.None);
+			await FlushAsync(publicationCancellationToken);
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 		{
@@ -145,6 +159,7 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 
 		var batch = pendingItems;
 		pendingItems = new List<T>();
+		pendingPrimaryItemCount = 0;
 		hasPublishedFirstBatch = true;
 		CancelTimerLocked();
 		return batch;
