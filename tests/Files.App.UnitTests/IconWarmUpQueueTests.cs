@@ -9,6 +9,7 @@ using Files.App.Utils;
 using Files.App.Utils.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Files.App.UnitTests;
 
@@ -45,15 +46,17 @@ public sealed class IconWarmUpQueueTests
 	}
 
 	[TestMethod]
-	public async Task TryQueue_PreservesEnumerationKindForShortcutAndFolder()
+	public async Task UniversalEnumerator_PublishesFileAndFolderKinds()
 	{
 		var cache = new RecordingIconCacheService();
 		await using var queue = new IconWarmUpQueue(cache, NullLogger<IconWarmUpQueue>.Instance, capacity: 4, workerCount: 1);
+		var items = new List<ListedItem>();
 
-		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), isFolderFromEnumeration: false, CancellationToken.None);
-		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), isFolderFromEnumeration: true, CancellationToken.None);
+		UniversalStorageEnumerator.PublishFileItem(queue, CreateItem(), items, CancellationToken.None, null);
+		UniversalStorageEnumerator.PublishFolderItem(queue, CreateItem(), items, CancellationToken.None, null);
 
 		await cache.Processed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		Assert.AreEqual(2, items.Count);
 		Assert.AreEqual(2, cache.IsFolderArguments.Count);
 		Assert.IsFalse(cache.IsFolderArguments[0]);
 		Assert.IsTrue(cache.IsFolderArguments[1]);
@@ -64,12 +67,33 @@ public sealed class IconWarmUpQueueTests
 	{
 		var cache = new BlockingIconCacheService();
 		await using var queue = new IconWarmUpQueue(cache, NullLogger<IconWarmUpQueue>.Instance, capacity: 1, workerCount: 1);
+		var items = new List<ListedItem>();
 
-		UniversalStorageEnumerator.QueueIconWarmUp(queue, CreateItem(), false, CancellationToken.None);
+		UniversalStorageEnumerator.PublishFolderItem(queue, CreateItem(), items, CancellationToken.None, null);
 
+		Assert.AreEqual(1, items.Count);
 		await cache.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 		cache.Complete();
 		await cache.Returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+	}
+
+	[TestMethod]
+	public async Task UniversalEnumerator_DefaultIconRemainsAfterWarmUp()
+	{
+		var cache = new BlockingIconCacheService();
+		await using var queue = new IconWarmUpQueue(cache, NullLogger<IconWarmUpQueue>.Instance, capacity: 1, workerCount: 1);
+		var item = CreateItem();
+		item.FileExtension = ".txt";
+		var defaultIcon = (BitmapImage)RuntimeHelpers.GetUninitializedObject(typeof(BitmapImage));
+		var defaultIconPairs = new Dictionary<string, BitmapImage> { [".txt"] = defaultIcon };
+
+		UniversalStorageEnumerator.PublishFileItem(queue, item, new List<ListedItem>(), CancellationToken.None, defaultIconPairs);
+
+		await cache.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		Assert.AreSame(defaultIcon, item.FileImage);
+		cache.Complete();
+		await cache.Returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		Assert.AreSame(defaultIcon, item.FileImage);
 	}
 
 	[TestMethod]

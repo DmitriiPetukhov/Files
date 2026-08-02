@@ -91,11 +91,7 @@ namespace Files.App.Utils.Storage
 							var folder = await AddFolderAsync(item.AsBaseStorageFolder(), currentStorageFolder, cancellationToken);
 							if (folder is not null)
 							{
-								if (defaultIconPairs?.ContainsKey(string.Empty) ?? false)
-									folder.FileImage = defaultIconPairs[string.Empty];
-
-								QueueIconWarmUp(iconWarmUpQueue, folder, isFolderFromEnumeration: true, cancellationToken);
-								tempList.Add(folder);
+								PublishFolderItem(iconWarmUpQueue, folder, tempList, cancellationToken, defaultIconPairs);
 
 								// The size provider enumerates with Win32, which reports size 0 for
 								// virtual paths (ftp, archives) it cannot traverse; skip those
@@ -116,19 +112,7 @@ namespace Files.App.Utils.Storage
 							var fileEntry = await AddFileAsync(item.AsBaseStorageFile(), currentStorageFolder, cancellationToken);
 							if (fileEntry is not null)
 							{
-								if (defaultIconPairs is not null)
-								{
-									if (!string.IsNullOrEmpty(fileEntry.FileExtension))
-									{
-										var lowercaseExtension = fileEntry.FileExtension.ToLowerInvariant();
-
-										if (defaultIconPairs.TryGetValue(lowercaseExtension, out BitmapImage? image))
-											fileEntry.FileImage = image;
-									}
-								}
-
-								QueueIconWarmUp(iconWarmUpQueue, fileEntry, isFolderFromEnumeration: false, cancellationToken);
-								tempList.Add(fileEntry);
+								PublishFileItem(iconWarmUpQueue, fileEntry, tempList, cancellationToken, defaultIconPairs);
 							}
 						}
 					}
@@ -152,6 +136,39 @@ namespace Files.App.Utils.Storage
 			}
 
 			return tempList;
+		}
+
+		internal static void PublishFolderItem(
+			IconWarmUpQueue queue,
+			ListedItem folder,
+			List<ListedItem> items,
+			CancellationToken cancellationToken,
+			Dictionary<string, BitmapImage> defaultIconPairs)
+		{
+			if (defaultIconPairs?.ContainsKey(string.Empty) ?? false)
+				folder.FileImage = defaultIconPairs[string.Empty];
+
+			QueueIconWarmUp(queue, folder, isFolderFromEnumeration: true, cancellationToken);
+			items.Add(folder);
+		}
+
+		internal static void PublishFileItem(
+			IconWarmUpQueue queue,
+			ListedItem file,
+			List<ListedItem> items,
+			CancellationToken cancellationToken,
+			Dictionary<string, BitmapImage> defaultIconPairs)
+		{
+			if (defaultIconPairs is not null && !string.IsNullOrEmpty(file.FileExtension))
+			{
+				var lowercaseExtension = file.FileExtension.ToLowerInvariant();
+
+				if (defaultIconPairs.TryGetValue(lowercaseExtension, out BitmapImage? image))
+					file.FileImage = image;
+			}
+
+			QueueIconWarmUp(queue, file, isFolderFromEnumeration: false, cancellationToken);
+			items.Add(file);
 		}
 
 		internal static void QueueIconWarmUp(
