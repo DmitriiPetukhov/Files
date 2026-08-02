@@ -3,7 +3,6 @@
 
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
-using Microsoft.Extensions.Logging;
 using System.IO;
 using Windows.Storage;
 using FileAttributes = System.IO.FileAttributes;
@@ -17,7 +16,7 @@ namespace Files.App.Utils.Storage
 
 		private static readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
-		private static readonly IIconCacheService iconCacheService = Ioc.Default.GetRequiredService<IIconCacheService>();
+		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
 
 		public static async Task<List<ListedItem>> ListEntries(
 			string path,
@@ -58,7 +57,7 @@ namespace Files.App.Utils.Storage
 						{
 							tempList.Add(file);
 							++count;
-							QueueIconWarmUp(file, cancellationToken);
+							iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 							if (areAlternateStreamsVisible)
 							{
@@ -75,7 +74,7 @@ namespace Files.App.Utils.Storage
 							{
 								tempList.Add(folder);
 								++count;
-								QueueIconWarmUp(folder, cancellationToken);
+							iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
 
 								if (areAlternateStreamsVisible)
 									tempList.AddRange(EnumAdsForPath(folder.ItemPath, folder));
@@ -110,40 +109,6 @@ namespace Files.App.Utils.Storage
 			Win32PInvoke.FindClose(hFile);
 
 			return tempList;
-		}
-
-		private static void QueueIconWarmUp(ListedItem item, CancellationToken navigationToken)
-		{
-			if (navigationToken.IsCancellationRequested)
-				return;
-
-			try
-			{
-				_ = Task.Run(() => WarmUpIconAsync(item, navigationToken));
-			}
-			catch (Exception ex)
-			{
-				App.Logger.LogDebug(ex, "Icon warm-up scheduling failed [{Id}] '{Extension}'", item.ItemPath.GetHashCode(), item.FileExtension ?? ":folder:");
-			}
-		}
-
-		private static async Task WarmUpIconAsync(ListedItem item, CancellationToken navigationToken)
-		{
-			try
-			{
-				var icon = await iconCacheService.GetIconAsync(item.ItemPath, item.FileExtension, item.IsFolder);
-
-				if (!navigationToken.IsCancellationRequested)
-					item.TrySetPreloadedIconData(icon);
-			}
-			catch (OperationCanceledException) when (navigationToken.IsCancellationRequested)
-			{
-				// Navigation cancellation is expected; do not log it.
-			}
-			catch (Exception ex)
-			{
-				App.Logger.LogDebug(ex, "Icon warm-up failed [{Id}] '{Extension}'", item.ItemPath.GetHashCode(), item.FileExtension ?? ":folder:");
-			}
 		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
