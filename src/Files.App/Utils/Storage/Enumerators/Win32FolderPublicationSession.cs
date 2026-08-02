@@ -9,45 +9,81 @@ internal sealed class Win32FolderPublicationSession<T>
 {
 	private readonly object syncRoot = new();
 	private readonly Win32IncrementalSortedAccumulator<T> accumulator;
+	private readonly Func<T, bool>? countsTowardPrimary;
+	private readonly Win32PublicationDiagnostics? diagnostics;
 	private bool isActive = true;
+	private int accumulatedCount;
+	private int primaryCount;
+	private int publicationCount;
 
-	public Win32FolderPublicationSession(IComparer<T> comparer)
+	public Win32FolderPublicationSession(IComparer<T> comparer, Func<T, bool>? countsTowardPrimary = null, Win32PublicationDiagnostics? diagnostics = null)
 	{
 		accumulator = new Win32IncrementalSortedAccumulator<T>(comparer);
+		this.countsTowardPrimary = countsTowardPrimary;
+		this.diagnostics = diagnostics;
 	}
 
-	public bool TryAppend(IEnumerable<T> batch, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
+	public bool TryAppend(IReadOnlyCollection<T> batch, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
 	{
 		ArgumentNullException.ThrowIfNull(batch);
 
 		lock (syncRoot)
 		{
-			if (!isActive || cancellationToken.IsCancellationRequested)
+			if (!isActive)
 			{
 				snapshot = null;
+				diagnostics?.Debug("rejected", 0, accumulatedCount, primaryCount);
+				return false;
+			}
+
+			if (cancellationToken.IsCancellationRequested)
+			{
+				snapshot = null;
+				diagnostics?.Debug("stale", 0, accumulatedCount, primaryCount);
 				return false;
 			}
 
 			snapshot = accumulator.AddBatch(batch);
+			accumulatedCount = snapshot.Count;
+			primaryCount += countsTowardPrimary is null ? batch.Count : batch.Count(countsTowardPrimary);
+			diagnostics?.Debug(publicationCount++ == 0 ? "first" : "intermediate", batch.Count, accumulatedCount, primaryCount);
 			return true;
 		}
 	}
 
-	public bool TryReplaceFinal(IEnumerable<T> items, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
+	public bool TryReplaceFinal(IReadOnlyCollection<T> items, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
 	{
 		ArgumentNullException.ThrowIfNull(items);
 
 		lock (syncRoot)
 		{
-			if (!isActive || cancellationToken.IsCancellationRequested)
+			if (!isActive)
 			{
 				snapshot = null;
+				diagnostics?.Debug("rejected", 0, accumulatedCount, primaryCount);
+				return false;
+			}
+
+			if (cancellationToken.IsCancellationRequested)
+			{
+				snapshot = null;
+				diagnostics?.Debug("stale", 0, accumulatedCount, primaryCount);
 				return false;
 			}
 
 			snapshot = accumulator.Replace(items);
+			accumulatedCount = snapshot.Count;
+			primaryCount = countsTowardPrimary is null ? items.Count : items.Count(countsTowardPrimary);
+			publicationCount++;
+			diagnostics?.Debug("final", items.Count, accumulatedCount, primaryCount);
 			return true;
 		}
+	}
+
+	public (int AccumulatedCount, int PrimaryCount) GetCounts()
+	{
+		lock (syncRoot)
+			return (accumulatedCount, primaryCount);
 	}
 
 	public void Cancel()

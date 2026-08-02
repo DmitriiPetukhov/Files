@@ -2224,15 +2224,27 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
+					var publicationDiagnostics = new Win32PublicationDiagnostics();
 					var publicationSession = new Win32FolderPublicationSession<ListedItem>(SortingHelper.GetComparer(
 						folderSettings.DirectorySortOption,
 						folderSettings.DirectorySortDirection,
 						folderSettings.SortDirectoriesAlongsideFiles,
-						folderSettings.SortFilesFirst));
+						folderSettings.SortFilesFirst),
+						item => !item.IsAlternateStream,
+						publicationDiagnostics);
 					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
-						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token, propagateExceptions: true),
+						async (snapshot, token) =>
+						{
+							await ApplyFilesAndFoldersSnapshotAsync(snapshot, token, propagateExceptions: true);
+							var counts = publicationSession.GetCounts();
+							publicationDiagnostics.Debug("coalesced", snapshot.Count, counts.AccumulatedCount, counts.PrimaryCount);
+						},
 						new DispatcherFolderSnapshotScheduler(dispatcherQueue),
-						exception => App.Logger.LogWarning(exception, "Win32 folder snapshot publication failed."));
+						exception =>
+						{
+							var counts = publicationSession.GetCounts();
+							publicationDiagnostics.Warning("failed", 0, counts.AccumulatedCount, counts.PrimaryCount, exception);
+						});
 
 					try
 					{
