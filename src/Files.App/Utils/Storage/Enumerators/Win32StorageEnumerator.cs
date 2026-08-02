@@ -16,7 +16,7 @@ namespace Files.App.Utils.Storage
 
 		private static readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
-		private static readonly IIconCacheService iconCacheService = Ioc.Default.GetRequiredService<IIconCacheService>();
+		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
 
 		public static async Task<List<ListedItem>> ListEntries(
 			string path,
@@ -55,9 +55,9 @@ namespace Files.App.Utils.Storage
 						var file = await GetFile(findData, path, isGitRepo, cancellationToken);
 						if (file is not null)
 						{
-							file.PreloadedIconData = await iconCacheService.GetIconAsync(file.ItemPath, file.FileExtension, false);
 							tempList.Add(file);
 							++count;
+							iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 							if (areAlternateStreamsVisible)
 							{
@@ -72,9 +72,9 @@ namespace Files.App.Utils.Storage
 							var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
 							if (folder is not null)
 							{
-								folder.PreloadedIconData = await iconCacheService.GetIconAsync(folder.ItemPath, null, true);
 								tempList.Add(folder);
 								++count;
+							iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
 
 								if (areAlternateStreamsVisible)
 									tempList.AddRange(EnumAdsForPath(folder.ItemPath, folder));

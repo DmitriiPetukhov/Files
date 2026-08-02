@@ -69,6 +69,14 @@ msbuild -restore src/Files.Core.SourceGenerator/Files.Core.SourceGenerator.cspro
 msbuild -restore src/Files.App/Files.App.csproj -p:Configuration=Debug -p:Platform=x64 -v:quiet -clp:ErrorsOnly
 ```
 
+To create a signed x64 test package, set `GenerateAppxPackageOnBuild=true`. Without it, MSBuild may only build binaries and leave stale package output.
+
+```powershell
+msbuild src/Files.App/Files.App.csproj -t:Build -p:Configuration=Release -p:Platform=x64 -p:AppxBundlePlatforms=x64 -p:AppxBundle=Never -p:GenerateAppxPackageOnBuild=true -p:UapAppxPackageBuildMode=SideloadOnly -p:AppxPackageDir='AppPackages\Signed\' -p:AppxPackageSigningEnabled=true -p:PackageCertificateThumbprint=D3A8812BD356E0A7B3D7672326CE092A5BE3FE05 -v:quiet -clp:ErrorsOnly
+```
+
+The package is emitted under `src/Files.App/AppPackages/Signed/`. Verify the certificate with `Get-PfxCertificate` and the MSIX with Windows SDK `signtool verify /pa /v` before distributing it. Never commit or share the certificate private key.
+
 ## Test
 
 We currently don't have a suitable set of tests for AI agents. Just make sure that the builds succeed.

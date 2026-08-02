@@ -30,7 +30,16 @@ namespace Files.App.Utils
 
 		public StorageItemTypes PrimaryItemAttribute { get; set; }
 
-		public byte[]? PreloadedIconData { get; set; }
+		private byte[]? preloadedIconData;
+		public byte[]? PreloadedIconData => Volatile.Read(ref preloadedIconData);
+
+		public bool TrySetPreloadedIconData(byte[]? iconData)
+		{
+			if (iconData is null)
+				return false;
+
+			return Interlocked.CompareExchange(ref preloadedIconData, iconData, null) is null;
+		}
 
 		public bool NeedsDelayedThumbnailLoad { get; set; }
 

@@ -1,0 +1,24 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>$(WindowsTargetFramework)</TargetFramework>
+        <TargetPlatformMinVersion>$(MinimalWindowsVersion)</TargetPlatformMinVersion>
+        <IsPackable>false</IsPackable>
+        <Configurations>Debug;Release</Configurations>
+        <Platforms>x86;x64;arm64</Platforms>
+        <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+        <OutputType>Exe</OutputType>
+        <UseWinUI>true</UseWinUI>
+        <WindowsAppSdkAutoInitialize>false</WindowsAppSdkAutoInitialize>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MSTest.TestAdapter" />
+        <PackageReference Include="MSTest.TestFramework" />
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
+        <ProjectReference Include="..\..\src\Files.App\Files.App.csproj"
+                          AdditionalProperties="WindowsAppSdkAutoInitialize=false;WindowsAppSdkBootstrapInitialize=false;WindowsAppSdkDeploymentManagerInitialize=false;WindowsAppSdkCompatibilityInitialize=false" />
+    </ItemGroup>
+
+</Project>

@@ -154,5 +154,32 @@
                  Properties="Configuration=$(Configuration);Platform=$(Platform)" />
     </Target>
 
+    <!-- Keep the out-of-process server payload beside its executable. -->
+    <Target Name="SetFilesAppServerPackagePaths"
+            AfterTargets="GetPackagingOutputs"
+            DependsOnTargets="BuildFilesAppServer"
+            Condition="'$(_FilesAppServerPackagePathsSet)' != 'true'">
+        <ItemGroup>
+            <_FilesAppServerPayloadToReplace Include="@(PackagingOutputs)"
+                                             Condition="('%(PackagingOutputs.OutputGroup)' == 'FilesAppServerPackageOutputGroup') Or (($([System.String]::Copy('%(PackagingOutputs.FullPath)').Contains('\\Files.App.Server\\bin\\'))) And ('%(PackagingOutputs.Extension)' != '.winmd'))" />
+            <PackagingOutputs Remove="@(_FilesAppServerPayloadToReplace)" />
+
+            <_FilesAppServerPayload Include="$(MSBuildProjectDirectory)\..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\**\*"
+                                    Exclude="$(MSBuildProjectDirectory)\..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\Files.App.Server.winmd" />
+        </ItemGroup>
+
+        <ItemGroup>
+            <PackagingOutputs Include="@(_FilesAppServerPayload)">
+                <TargetPath>Files.App.Server\%(_FilesAppServerPayload.RecursiveDir)%(_FilesAppServerPayload.Filename)%(_FilesAppServerPayload.Extension)</TargetPath>
+                <OutputGroup>FilesAppServerPackageOutputGroup</OutputGroup>
+                <ProjectName>$(MSBuildProjectName)</ProjectName>
+            </PackagingOutputs>
+        </ItemGroup>
+
+        <PropertyGroup>
+            <_FilesAppServerPackagePathsSet>true</_FilesAppServerPackagePathsSet>
+        </PropertyGroup>
+    </Target>
+
     <Import Project="..\Satori.targets" Condition=" '$(Platform)' != 'x86' " />
 </Project>
