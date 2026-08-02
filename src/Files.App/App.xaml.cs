@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using Files.App.Helpers.Application;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.UI.Xaml;
@@ -44,6 +45,8 @@ namespace Files.App
 		public static AppModel AppModel { get; private set; } = null!;
 		public static ILogger Logger { get; private set; } = NullLogger.Instance;
 
+		private IHost? appHost;
+
 		/// <summary>
 		/// Initializes an instance of <see cref="App"/>.
 		/// </summary>
@@ -55,6 +58,25 @@ namespace Files.App
 			UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.Exception, true);
 			AppDomain.CurrentDomain.UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.ExceptionObject as Exception, false);
 			TaskScheduler.UnobservedTaskException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.Exception, false);
+		}
+
+		internal static async ValueTask DisposeHostAsync(IAsyncDisposable? host)
+		{
+			if (host is not null)
+				await host.DisposeAsync().ConfigureAwait(false);
+		}
+
+		internal static async ValueTask DisposeHostAsync(IHost? host)
+		{
+			if (host is null)
+				return;
+
+			if (host is IAsyncDisposable asyncHost)
+				await DisposeHostAsync(asyncHost);
+			else if (host.Services is IAsyncDisposable asyncServices)
+				await DisposeHostAsync(asyncServices);
+			else
+				host.Dispose();
 		}
 
 		/// <summary>
@@ -83,8 +105,8 @@ namespace Files.App
 				}
 
 				// Configure the DI (dependency injection) container
-				var host = AppLifecycleHelper.ConfigureHost();
-				Ioc.Default.ConfigureServices(host.Services);
+				appHost = AppLifecycleHelper.ConfigureHost();
+				Ioc.Default.ConfigureServices(appHost.Services);
 
 				// Configure Sentry
 				if (AppLifecycleHelper.AppEnvironment is not AppEnvironment.Dev)
@@ -312,6 +334,17 @@ namespace Files.App
 
 			// Wait for ongoing file operations
 			FileOperationsHelpers.WaitForCompletion();
+
+			var host = appHost;
+			appHost = null;
+			try
+			{
+				await DisposeHostAsync(host);
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError(ex, "Failed to dispose the application host during shutdown");
+			}
 		}
 
 		/// <summary>
