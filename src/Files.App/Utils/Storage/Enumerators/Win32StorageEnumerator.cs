@@ -17,6 +17,9 @@ namespace Files.App.Utils.Storage
 		private static readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
 		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
+		private const int InitialPublicationBatchSize = 8;
+		private const int IntermediatePublicationBatchSize = 32;
+		private static readonly TimeSpan publicationBatchTimeout = TimeSpan.FromMilliseconds(500);
 
 		public static async Task<List<ListedItem>> ListEntries(
 			string path,
@@ -27,9 +30,23 @@ namespace Files.App.Utils.Storage
 			Func<List<ListedItem>, Task> intermediateAction
 		)
 		{
-			var sampler = new IntervalSampler(500);
 			var tempList = new List<ListedItem>();
 			var count = 0;
+			Win32EnumerationPublicationGate<ListedItem>? publicationGate = intermediateAction is null
+				? null
+				: new Win32EnumerationPublicationGate<ListedItem>(
+					batch => intermediateAction(new List<ListedItem>(batch)),
+					InitialPublicationBatchSize,
+					IntermediatePublicationBatchSize,
+					publicationBatchTimeout);
+
+			async Task AddItemAsync(ListedItem item)
+			{
+				if (publicationGate is null)
+					tempList.Add(item);
+				else
+					await publicationGate.AddAsync(item, cancellationToken);
+			}
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
 			bool CalculateFolderSizes = userSettingsService.FoldersSettingsService.CalculateFolderSizes;
@@ -40,75 +57,85 @@ namespace Files.App.Utils.Storage
 
 			var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) && !string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
 
-			do
+			try
 			{
-				var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
-				var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
-				var startWithDot = findData.cFileName.StartsWith('.');
-				if ((!isHidden ||
-					(showHiddenItems &&
-					(!isSystem || showProtectedSystemFiles))) &&
-					(!startWithDot || showDotFiles))
+				do
 				{
-					if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) != FileAttributes.Directory)
+					var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
+					var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
+					var startWithDot = findData.cFileName.StartsWith('.');
+					if ((!isHidden ||
+						(showHiddenItems &&
+						(!isSystem || showProtectedSystemFiles))) &&
+						(!startWithDot || showDotFiles))
 					{
-						var file = await GetFile(findData, path, isGitRepo, cancellationToken);
-						if (file is not null)
+						if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) != FileAttributes.Directory)
 						{
-							tempList.Add(file);
-							++count;
-							iconWarmUpQueue.TryQueue(file, false, cancellationToken);
+							var file = await GetFile(findData, path, isGitRepo, cancellationToken);
+							if (file is not null)
+							{
+								await AddItemAsync(file);
 
-							if (areAlternateStreamsVisible)
-							{
-								tempList.AddRange(EnumAdsForPath(file.ItemPath, file));
-							}
-						}
-					}
-					else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
-					{
-						if (findData.cFileName != "." && findData.cFileName != "..")
-						{
-							var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
-							if (folder is not null)
-							{
-								tempList.Add(folder);
 								++count;
-							iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+								iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 								if (areAlternateStreamsVisible)
-									tempList.AddRange(EnumAdsForPath(folder.ItemPath, folder));
-
-								if (CalculateFolderSizes)
 								{
-									if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
+									foreach (var adsItem in EnumAdsForPath(file.ItemPath, file))
+										await AddItemAsync(adsItem);
+								}
+							}
+						}
+						else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
+						{
+							if (findData.cFileName != "." && findData.cFileName != "..")
+							{
+								var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
+								if (folder is not null)
+								{
+									await AddItemAsync(folder);
+
+									++count;
+									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+
+									if (areAlternateStreamsVisible)
 									{
-										folder.FileSizeBytes = (long)size;
-										folder.FileSize = size.ToSizeString();
+										foreach (var adsItem in EnumAdsForPath(folder.ItemPath, folder))
+											await AddItemAsync(adsItem);
 									}
 
-									_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
+									if (CalculateFolderSizes)
+									{
+										if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
+										{
+											folder.FileSizeBytes = (long)size;
+											folder.FileSize = size.ToSizeString();
+										}
+
+										_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
+									}
 								}
 							}
 						}
 					}
-				}
 
-				if (cancellationToken.IsCancellationRequested || count == countLimit)
-					break;
+					if (cancellationToken.IsCancellationRequested || count == countLimit)
+						break;
 
-				if (intermediateAction is not null && (count == 32 || sampler.CheckNow()))
-				{
-					await intermediateAction(tempList);
+				} while (Win32PInvoke.FindNextFile(hFile, out findData));
 
-					// clear the temporary list every time we do an intermediate action
-					tempList.Clear();
-				}
-			} while (Win32PInvoke.FindNextFile(hFile, out findData));
+				if (publicationGate is not null)
+					await publicationGate.CompleteAsync(cancellationToken);
 
-			Win32PInvoke.FindClose(hFile);
+				return tempList;
+			}
+			finally
+			{
+				if (publicationGate is not null)
+					await publicationGate.CancelAsync();
 
-			return tempList;
+				Win32PInvoke.FindClose(hFile);
+			}
 		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
