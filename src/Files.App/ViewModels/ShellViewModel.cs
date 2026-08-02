@@ -1042,28 +1042,30 @@ namespace Files.App.ViewModels
 
 
 		// Apply changes immediately after manipulating on filesAndFolders completed
-		public async Task ApplyFilesAndFoldersChangesAsync()
+		public Task ApplyFilesAndFoldersChangesAsync()
+		{
+			var snapshot = filesAndFolders?.ToList() ?? [];
+			var cancellationToken = addFilesCTS?.Token ?? CancellationToken.None;
+
+			return ApplyFilesAndFoldersSnapshotAsync(snapshot, cancellationToken);
+		}
+
+		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken)
 		{
 			try
 			{
-				if (filesAndFolders is null || filesAndFolders.Count == 0)
+				if (snapshot.Count == 0)
 				{
-					void ClearDisplay()
-					{
-						FilesAndFolders.Clear();
-						UpdateEmptyTextType();
-						UpdateNetworkAvailabilityInfoBar();
-						DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
-					}
-
-					if (dispatcherQueue.HasThreadAccess)
-						ClearDisplay();
-					else
-						await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplay);
+					await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplayOnUi);
 
 					return;
 				}
-				var filesAndFoldersLocal = filesAndFolders.ToList();
+
+				if (dispatcherQueue.HasThreadAccess)
+				{
+					ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
+					return;
+				}
 
 				// CollectionChanged will cause UI update, which may cause significant performance degradation,
 				// so suppress CollectionChanged event here while loading items heavily.
@@ -1071,7 +1073,7 @@ namespace Files.App.ViewModels
 				// Note that both DataGrid and GridView don't support multi-items changes notification, so here
 				// we have to call BeginBulkOperation to suppress CollectionChanged and call EndBulkOperation
 				// in the end to fire a CollectionChanged event with NotifyCollectionChangedAction.Reset
-				await bulkOperationSemaphore.WaitAsync(addFilesCTS.Token);
+				await bulkOperationSemaphore.WaitAsync(cancellationToken);
 				var isSemaphoreReleased = false;
 				try
 				{
@@ -1079,26 +1081,7 @@ namespace Files.App.ViewModels
 					{
 						try
 						{
-							FilesAndFolders.BeginBulkOperation();
-
-							if (addFilesCTS.IsCancellationRequested)
-								return;
-
-							FilesAndFolders.Clear();
-							if (string.IsNullOrEmpty(FilesAndFoldersFilter))
-								FilesAndFolders.AddRange(filesAndFoldersLocal);
-							else
-								FilesAndFolders.AddRange(filesAndFoldersLocal.Where(x => x.Name.Contains(FilesAndFoldersFilter, StringComparison.OrdinalIgnoreCase)));
-
-							if (folderSettings.DirectoryGroupOption != GroupOption.None)
-								OrderGroups();
-
-							// Trigger CollectionChanged with NotifyCollectionChangedAction.Reset
-							// once loading is completed so that UI can be updated
-							FilesAndFolders.EndBulkOperation();
-							UpdateEmptyTextType();
-							UpdateNetworkAvailabilityInfoBar();
-							DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
+							ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
 						}
 						finally
 						{
@@ -1119,6 +1102,45 @@ namespace Files.App.ViewModels
 			catch (Exception ex)
 			{
 				App.Logger.LogWarning(ex, ex.Message);
+			}
+		}
+
+		private void ClearDisplayOnUi()
+		{
+			FilesAndFolders.Clear();
+			UpdateEmptyTextType();
+			UpdateNetworkAvailabilityInfoBar();
+			DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
+		}
+
+		private void ApplyFilesAndFoldersSnapshotOnUi(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken)
+		{
+			var bulkOperationStarted = false;
+			try
+			{
+				FilesAndFolders.BeginBulkOperation();
+				bulkOperationStarted = true;
+
+				if (cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
+					return;
+
+				FilesAndFolders.Clear();
+				if (string.IsNullOrEmpty(FilesAndFoldersFilter))
+					FilesAndFolders.AddRange(snapshot);
+				else
+					FilesAndFolders.AddRange(snapshot.Where(x => x.Name.Contains(FilesAndFoldersFilter, StringComparison.OrdinalIgnoreCase)));
+
+				if (folderSettings.DirectoryGroupOption != GroupOption.None)
+					OrderGroups();
+
+				UpdateEmptyTextType();
+				UpdateNetworkAvailabilityInfoBar();
+				DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
+			}
+			finally
+			{
+				if (bulkOperationStarted)
+					FilesAndFolders.EndBulkOperation();
 			}
 		}
 
@@ -2190,18 +2212,29 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
-					await Task.Run(async () =>
+					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
+						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token),
+						callback => dispatcherQueue.EnqueueOrInvokeAsync(callback),
+						exception => App.Logger.LogWarning(exception, "Win32 folder snapshot publication failed."));
+
+					try
 					{
-						List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: async (intermediateList) =>
+						await Task.Run(async () =>
 						{
-							filesAndFolders.AddRange(intermediateList);
-							await ApplyFilesAndFoldersChangesAsync();
-						});
+							List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: async (intermediateList) =>
+							{
+								filesAndFolders.AddRange(intermediateList);
+								await OrderFilesAndFoldersAsync();
+								snapshotCoalescer.Submit(filesAndFolders.ToList(), cancellationToken);
+							});
 
-						filesAndFolders.AddRange(fileList);
+							filesAndFolders.AddRange(fileList);
 
-						await OrderFilesAndFoldersAsync();
-						await ApplyFilesAndFoldersChangesAsync();
+							await OrderFilesAndFoldersAsync();
+							snapshotCoalescer.Submit(filesAndFolders.ToList(), cancellationToken);
+							await snapshotCoalescer.DrainAsync(cancellationToken);
+						}, cancellationToken);
+
 						// Not awaited here: with Low priority these don't run until the UI thread goes idle
 						// after the final list update, which would delay load completion and watcher setup.
 						// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.
@@ -2213,7 +2246,11 @@ namespace Files.App.ViewModels
 							FilesAndFoldersFilter = null;
 						},
 						Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-					});
+					}
+					finally
+					{
+						snapshotCoalescer.Cancel();
+					}
 
 					rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
 					if (rootFolder is not null)
