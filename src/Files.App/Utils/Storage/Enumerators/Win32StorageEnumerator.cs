@@ -4,9 +4,7 @@
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using System.IO;
-using System.Runtime.InteropServices;
 using Windows.Storage;
-using Windows.Win32.Foundation;
 using FileAttributes = System.IO.FileAttributes;
 
 namespace Files.App.Utils.Storage
@@ -122,13 +120,6 @@ namespace Files.App.Utils.Storage
 						pendingBatch.Clear();
 					}
 				} while (Win32PInvoke.FindNextFile(hFile, out findData));
-
-				if (!stoppedBeforeFindNext)
-				{
-					var errorCode = Marshal.GetLastWin32Error();
-					if (errorCode != (int)WIN32_ERROR.ERROR_NO_MORE_FILES)
-						throw new Win32Exception(errorCode);
-				}
 
 				return allAcceptedItems;
 			}
