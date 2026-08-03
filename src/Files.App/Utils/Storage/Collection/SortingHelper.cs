@@ -86,7 +86,10 @@ namespace Files.App.Utils.Storage
 						return emptyTagComparison;
 				}
 
-				var sortComparison = Comparer<object>.Default.Compare(orderFunc(x), orderFunc(y)) * directionMultiplier;
+				var primaryComparer = directorySortOption == SortOption.Name
+					? naturalStringComparer
+					: Comparer<object>.Default;
+				var sortComparison = primaryComparer.Compare(orderFunc(x), orderFunc(y)) * directionMultiplier;
 				if (sortComparison != 0)
 					return sortComparison;
 
