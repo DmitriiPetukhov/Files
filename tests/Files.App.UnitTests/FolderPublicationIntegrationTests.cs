@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -27,9 +31,9 @@ public sealed class FolderPublicationSessionIntegrationTests
 		}, CancellationToken.None);
 
 		Assert.IsTrue(session.TryReplaceFinal(finalItems, CancellationToken.None, out var finalSnapshot));
-		CollectionAssert.AreEqual(["a", "b"], publishedSnapshots[0].ToArray());
-		CollectionAssert.AreEqual(["a", "b", "c", "d"], publishedSnapshots[1].ToArray());
-		CollectionAssert.AreEqual(["a", "b", "c", "d"], finalSnapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b" }, publishedSnapshots[0].ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, publishedSnapshots[1].ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, finalSnapshot!.ToArray());
 	}
 
 	private sealed class FakeFolderEnumerationSource<T>(IReadOnlyList<IReadOnlyCollection<T>> batches, IReadOnlyCollection<T> finalItems)

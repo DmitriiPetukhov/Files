@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -14,8 +18,8 @@ public sealed class FolderPublicationSessionTests
 		Assert.IsTrue(session.TryAppend(["b", "a"], CancellationToken.None, out var firstSnapshot));
 		Assert.IsTrue(session.TryAppend(["d", "c"], CancellationToken.None, out var secondSnapshot));
 
-		CollectionAssert.AreEqual(["a", "b"], firstSnapshot!.ToArray());
-		CollectionAssert.AreEqual(["a", "b", "c", "d"], secondSnapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b" }, firstSnapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, secondSnapshot!.ToArray());
 	}
 
 	[TestMethod]
@@ -26,7 +30,7 @@ public sealed class FolderPublicationSessionTests
 
 		Assert.IsTrue(session.TryReplaceFinal(["d", "c"], CancellationToken.None, out var snapshot));
 
-		CollectionAssert.AreEqual(["c", "d"], snapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "c", "d" }, snapshot!.ToArray());
 	}
 
 	[TestMethod]
@@ -47,7 +51,7 @@ public sealed class FolderPublicationSessionTests
 
 		session.TryAppend(["c"], CancellationToken.None, out _);
 
-		CollectionAssert.AreEqual(["a", "b"], firstSnapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "a", "b" }, firstSnapshot!.ToArray());
 	}
 
 	[TestMethod]
@@ -59,7 +63,7 @@ public sealed class FolderPublicationSessionTests
 
 		Assert.IsTrue(session.TryAppend([first, second], CancellationToken.None, out var snapshot));
 
-		CollectionAssert.AreEqual([first, second], snapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { first, second }, snapshot!.ToArray());
 	}
 
 	[TestMethod]
@@ -71,8 +75,8 @@ public sealed class FolderPublicationSessionTests
 		Assert.IsTrue(session.TryRebuildIndex(Comparer<string>.Create((left, right) => string.CompareOrdinal(right, left)), CancellationToken.None, out var snapshot));
 		Assert.IsTrue(session.TryAppend(["d"], CancellationToken.None, out var afterAppend));
 
-		CollectionAssert.AreEqual(["c", "b", "a"], snapshot!.ToArray());
-		CollectionAssert.AreEqual(["d", "c", "b", "a"], afterAppend!.ToArray());
+		CollectionAssert.AreEqual(new[] { "c", "b", "a" }, snapshot!.ToArray());
+		CollectionAssert.AreEqual(new[] { "d", "c", "b", "a" }, afterAppend!.ToArray());
 	}
 
 	private sealed record TestItem(string Key, int Id);

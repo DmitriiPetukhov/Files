@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using Files.App.Data.Enums;
@@ -22,7 +24,7 @@ public sealed class SortingHelperTests
 
 		var ordered = items.OrderBy(item => item, SortingHelper.GetComparer(SortOption.Name, SortDirection.Ascending, true, false)).ToArray();
 
-		CollectionAssert.AreEqual(["file2", "file10"], ordered.Select(item => item.Name).ToArray());
+		CollectionAssert.AreEqual(new[] { "file2", "file10" }, ordered.Select(item => item.Name).ToArray());
 	}
 
 	[TestMethod]
@@ -34,7 +36,7 @@ public sealed class SortingHelperTests
 
 		var ordered = new[] { file, folder }.OrderBy(item => item, comparer).ToArray();
 
-		CollectionAssert.AreEqual([folder, file], ordered);
+		CollectionAssert.AreEqual(new[] { folder, file }, ordered);
 	}
 
 	[TestMethod]
@@ -48,7 +50,7 @@ public sealed class SortingHelperTests
 		var comparer = SortingHelper.GetComparer(SortOption.Size, SortDirection.Ascending, true, false);
 		var ordered = new[] { later, earlier }.OrderBy(item => item, comparer).ToArray();
 
-		CollectionAssert.AreEqual([earlier, later], ordered);
+		CollectionAssert.AreEqual(new[] { earlier, later }, ordered);
 	}
 
 	private static ListedItem CreateItem(string name, StorageItemTypes itemType = StorageItemTypes.Folder)
