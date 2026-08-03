@@ -1179,14 +1179,16 @@ namespace Files.App.ViewModels
 			if (session is null)
 				return false;
 
-			if (!session.TryRebuildIndex(
+			var rebuildResult = await FolderPublicationSessionWorker.RebuildIndexAsync(
+				session,
 				SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
 					folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
-				addFilesCTS.Token,
-				out var snapshot))
+				addFilesCTS.Token);
+
+			if (!rebuildResult.Accepted)
 				return false;
 
-			filesAndFolders = new ConcurrentCollection<ListedItem>(snapshot!);
+			filesAndFolders = new ConcurrentCollection<ListedItem>(rebuildResult.Snapshot!);
 			await ApplyFilesAndFoldersChangesAsync();
 			return true;
 		}
