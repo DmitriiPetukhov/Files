@@ -1948,10 +1948,13 @@ namespace Files.App.ViewModels
 						IsTypeGitRepository = IsValidGitDirectory
 					});
 
-					if (!HasNoWatcher)
-						WatchForDirectoryChanges(path, syncStatus);
-					if (IsValidGitDirectory)
-						WatchForGitChanges();
+					if (!IsLoadingCancelled)
+					{
+						if (!HasNoWatcher)
+							WatchForDirectoryChanges(path, syncStatus);
+						if (IsValidGitDirectory)
+							WatchForGitChanges();
+					}
 					break;
 
 				// Enumerated with StorageFolder
@@ -2219,6 +2222,9 @@ namespace Files.App.ViewModels
 							},
 							Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
 						});
+
+						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+							return -1;
 					}
 					catch (Win32Exception ex)
 					{
