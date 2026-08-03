@@ -2192,14 +2192,17 @@ namespace Files.App.ViewModels
 				{
 					await Task.Run(async () =>
 					{
-						List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: async (intermediateList) =>
+						IFolderEnumerationSource<ListedItem> source = new Win32FolderEnumerationSource(path, hFile, findData);
+						IReadOnlyCollection<ListedItem> finalItems = await source.EnumerateAsync(async intermediateList =>
 						{
 							filesAndFolders.AddRange(intermediateList);
 							await ApplyFilesAndFoldersChangesAsync();
-						});
+						}, cancellationToken);
 
-						filesAndFolders.AddRange(fileList);
+						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+							return;
 
+						filesAndFolders = new ConcurrentCollection<ListedItem>(finalItems);
 						await OrderFilesAndFoldersAsync();
 						await ApplyFilesAndFoldersChangesAsync();
 						// Not awaited here: with Low priority these don't run until the UI thread goes idle
