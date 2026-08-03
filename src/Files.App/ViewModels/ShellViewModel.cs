@@ -1167,33 +1167,23 @@ namespace Files.App.ViewModels
 
 		private void ApplyFilesAndFoldersSnapshotOnUi(IReadOnlyCollection<ListedItem> snapshot, CancellationToken cancellationToken)
 		{
-			var bulkOperationStarted = false;
-			try
-			{
-				FilesAndFolders.BeginBulkOperation();
-				bulkOperationStarted = true;
+			using var bulkOperation = new BulkOperationScope(FilesAndFolders.BeginBulkOperation, FilesAndFolders.EndBulkOperation);
 
-				if (cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
-					return;
+			if (cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
+				return;
 
-				FilesAndFolders.Clear();
-				if (string.IsNullOrEmpty(FilesAndFoldersFilter))
-					FilesAndFolders.AddRange(snapshot);
-				else
-					FilesAndFolders.AddRange(snapshot.Where(x => x.Name.Contains(FilesAndFoldersFilter, StringComparison.OrdinalIgnoreCase)));
+			FilesAndFolders.Clear();
+			if (string.IsNullOrEmpty(FilesAndFoldersFilter))
+				FilesAndFolders.AddRange(snapshot);
+			else
+				FilesAndFolders.AddRange(snapshot.Where(x => x.Name.Contains(FilesAndFoldersFilter, StringComparison.OrdinalIgnoreCase)));
 
-				if (folderSettings.DirectoryGroupOption != GroupOption.None)
-					OrderGroups();
+			if (folderSettings.DirectoryGroupOption != GroupOption.None)
+				OrderGroups();
 
-				UpdateEmptyTextType();
-				UpdateNetworkAvailabilityInfoBar();
-				DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
-			}
-			finally
-			{
-				if (bulkOperationStarted)
-					FilesAndFolders.EndBulkOperation();
-			}
+			UpdateEmptyTextType();
+			UpdateNetworkAvailabilityInfoBar();
+			DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
 		}
 
 		private Task RequestSelectionAsync(List<ListedItem> itemsToSelect)
