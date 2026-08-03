@@ -1948,10 +1948,13 @@ namespace Files.App.ViewModels
 						IsTypeGitRepository = IsValidGitDirectory
 					});
 
-					if (!HasNoWatcher)
-						WatchForDirectoryChanges(path, syncStatus);
-					if (IsValidGitDirectory)
-						WatchForGitChanges();
+					if (!IsLoadingCancelled)
+					{
+						if (!HasNoWatcher)
+							WatchForDirectoryChanges(path, syncStatus);
+						if (IsValidGitDirectory)
+							WatchForGitChanges();
+					}
 					break;
 
 				// Enumerated with StorageFolder
@@ -2190,30 +2193,53 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
-					await Task.Run(async () =>
+					try
 					{
-						List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: async (intermediateList) =>
+						await Task.Run(async () =>
 						{
-							filesAndFolders.AddRange(intermediateList);
+							IFolderEnumerationSource<ListedItem> source = new Win32FolderEnumerationSource(path, hFile, findData);
+							IReadOnlyCollection<ListedItem> finalItems = await source.EnumerateAsync(async intermediateList =>
+							{
+								filesAndFolders.AddRange(intermediateList);
+								await ApplyFilesAndFoldersChangesAsync();
+							}, cancellationToken);
+
+							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+								return;
+
+							filesAndFolders = new ConcurrentCollection<ListedItem>(finalItems);
+							await OrderFilesAndFoldersAsync();
 							await ApplyFilesAndFoldersChangesAsync();
+							// Not awaited here: with Low priority these don't run until the UI thread goes idle
+							// after the final list update, which would delay load completion and watcher setup.
+							// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.
+							_ = dispatcherQueue.EnqueueOrInvokeAsync(CheckForSolutionFile, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
+							desktopIniUpdateTask = dispatcherQueue.EnqueueOrInvokeAsync(() =>
+							{
+								GetDesktopIniFileData();
+								CheckForBackgroundImage();
+								FilesAndFoldersFilter = null;
+							},
+							Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
 						});
 
-						filesAndFolders.AddRange(fileList);
+						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+							return -1;
+					}
+					catch (Win32Exception ex)
+					{
+						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+							return -1;
 
-						await OrderFilesAndFoldersAsync();
-						await ApplyFilesAndFoldersChangesAsync();
-						// Not awaited here: with Low priority these don't run until the UI thread goes idle
-						// after the final list update, which would delay load completion and watcher setup.
-						// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.
-						_ = dispatcherQueue.EnqueueOrInvokeAsync(CheckForSolutionFile, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-						desktopIniUpdateTask = dispatcherQueue.EnqueueOrInvokeAsync(() =>
-						{
-							GetDesktopIniFileData();
-							CheckForBackgroundImage();
-							FilesAndFoldersFilter = null;
-						},
-						Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-					});
+						App.Logger.LogWarning(ex, "Native folder enumeration failed for {Path} with Win32 error {ErrorCode}.", LogPathHelper.GetPathIdentifier(path), ex.NativeErrorCode);
+
+						if (ex.NativeErrorCode == (int)Windows.Win32.Foundation.WIN32_ERROR.ERROR_ACCESS_DENIED)
+							ShowLocationInaccessibleOrMissing(path);
+						else
+							ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged, ex.NativeErrorCode.ToString());
+
+						return -1;
+					}
 
 					rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
 					if (rootFolder is not null)
