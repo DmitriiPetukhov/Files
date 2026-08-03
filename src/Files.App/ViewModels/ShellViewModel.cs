@@ -174,6 +174,7 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource updateTagGroupCTS;
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
+		private IFolderPublicationSession<ListedItem>? folderPublicationSession;
 
 		public event EventHandler FocusFilterHeader;
 
@@ -480,6 +481,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedBySyncStatus));
 			OnPropertyChanged(nameof(IsSortedByFileTag));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -489,6 +493,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedAscending));
 			OnPropertyChanged(nameof(IsSortedDescending));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -497,6 +504,9 @@ namespace Files.App.ViewModels
 		{
 			OnPropertyChanged(nameof(AreDirectoriesSortedAlongsideFiles));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -504,6 +514,9 @@ namespace Files.App.ViewModels
 		public async Task UpdateSortFilesFirstAsync()
 		{
 			OnPropertyChanged(nameof(AreFilesSortedFirst));
+
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
 
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
@@ -886,6 +899,8 @@ namespace Files.App.ViewModels
 		public void CancelLoadAndClearFiles()
 		{
 			Debug.WriteLine("CancelLoadAndClearFiles");
+			folderPublicationSession?.Cancel();
+			folderPublicationSession = null;
 			CloseWatcher();
 			CancelNetworkAvailabilityUpdate();
 			IsNetworkDiscoveryInfoBarOpen = false;
@@ -1156,6 +1171,24 @@ namespace Files.App.ViewModels
 			OrderEntries();
 
 			return Task.CompletedTask;
+		}
+
+		private async Task<bool> TryRebuildFolderPublicationIndexAsync()
+		{
+			var session = folderPublicationSession;
+			if (session is null)
+				return false;
+
+			if (!session.TryRebuildIndex(
+				SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
+					folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
+				addFilesCTS.Token,
+				out var snapshot))
+				return false;
+
+			filesAndFolders = new ConcurrentCollection<ListedItem>(snapshot!);
+			await ApplyFilesAndFoldersChangesAsync();
+			return true;
 		}
 
 		private void OrderGroups(CancellationToken token = default)
@@ -2193,6 +2226,11 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
+					var publicationSession = new FolderPublicationSession<ListedItem>(
+						SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
+							folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst));
+					folderPublicationSession = publicationSession;
+
 					try
 					{
 						await Task.Run(async () =>
@@ -2200,15 +2238,20 @@ namespace Files.App.ViewModels
 							IFolderEnumerationSource<ListedItem> source = new Win32FolderEnumerationSource(path, hFile, findData);
 							IReadOnlyCollection<ListedItem> finalItems = await source.EnumerateAsync(async intermediateList =>
 							{
-								filesAndFolders.AddRange(intermediateList);
+								if (!publicationSession.TryAppend(intermediateList, cancellationToken, out var snapshot))
+									return;
+
+								filesAndFolders = new ConcurrentCollection<ListedItem>(snapshot!);
 								await ApplyFilesAndFoldersChangesAsync();
 							}, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
 								return;
 
-							filesAndFolders = new ConcurrentCollection<ListedItem>(finalItems);
-							await OrderFilesAndFoldersAsync();
+							if (!publicationSession.TryReplaceFinal(finalItems, cancellationToken, out var finalSnapshot))
+								return;
+
+							filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);
 							await ApplyFilesAndFoldersChangesAsync();
 							// Not awaited here: with Low priority these don't run until the UI thread goes idle
 							// after the final list update, which would delay load completion and watcher setup.
