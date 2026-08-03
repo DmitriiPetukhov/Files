@@ -1066,7 +1066,7 @@ namespace Files.App.ViewModels
 			return ApplyFilesAndFoldersSnapshotAsync(snapshot, cancellationToken);
 		}
 
-		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
+		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyCollection<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
 		{
 			var snapshotGeneration = snapshotApplicationGeneration.Start();
 
@@ -1165,7 +1165,7 @@ namespace Files.App.ViewModels
 			DirectoryInfoUpdated?.Invoke(this, EventArgs.Empty);
 		}
 
-		private void ApplyFilesAndFoldersSnapshotOnUi(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken)
+		private void ApplyFilesAndFoldersSnapshotOnUi(IReadOnlyCollection<ListedItem> snapshot, CancellationToken cancellationToken)
 		{
 			var bulkOperationStarted = false;
 			try

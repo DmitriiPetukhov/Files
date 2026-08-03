@@ -8,7 +8,7 @@ namespace Files.App.Utils.Storage;
 internal sealed class EnumerationSnapshotCoalescer<T>
 {
 	private readonly object syncRoot = new();
-	private readonly Func<IReadOnlyList<T>, CancellationToken, Task> applyAsync;
+	private readonly Func<IReadOnlyCollection<T>, CancellationToken, Task> applyAsync;
 	private readonly IFolderSnapshotScheduler scheduler;
 	private readonly Action<Exception>? errorHandler;
 	private readonly TimeSpan intermediateApplyCooldown;
@@ -28,7 +28,7 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 	private bool isCanceled;
 
 	public EnumerationSnapshotCoalescer(
-		Func<IReadOnlyList<T>, CancellationToken, Task> applyAsync,
+		Func<IReadOnlyCollection<T>, CancellationToken, Task> applyAsync,
 		IFolderSnapshotScheduler scheduler,
 		Action<Exception>? errorHandler = null,
 		TimeSpan intermediateApplyCooldown = default,
@@ -216,7 +216,7 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 		try
 		{
 			if (activeApplyCompletion is not null)
-				await applyAsync(snapshot as IReadOnlyList<T> ?? snapshot.ToArray(), cancellationToken);
+				await applyAsync(snapshot, cancellationToken);
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || isCanceled)
 		{

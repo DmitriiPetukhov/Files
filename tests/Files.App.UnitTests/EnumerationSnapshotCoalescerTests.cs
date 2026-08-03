@@ -1,6 +1,7 @@
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -26,6 +27,29 @@ public sealed class EnumerationSnapshotCoalescerTests
 		Assert.AreEqual(1, applied.Count);
 		CollectionAssert.AreEqual(new[] { 1, 2 }, applied[0]);
 		Assert.AreEqual(0, scheduler.ScheduledCount);
+	}
+
+	[TestMethod]
+	public async Task PreservesSnapshotReferenceUntilApply()
+	{
+		var scheduler = new ManualScheduler();
+		var snapshot = new TrackingCollection(1, 2);
+		object? receivedSnapshot = null;
+		var coalescer = new EnumerationSnapshotCoalescer<int>(
+			(received, _) =>
+			{
+				receivedSnapshot = received;
+				return Task.CompletedTask;
+			},
+			scheduler);
+
+		coalescer.Submit(snapshot, CancellationToken.None);
+
+		Assert.AreEqual(0, snapshot.EnumerationCount);
+		await scheduler.RunNextAsync();
+
+		Assert.AreSame(snapshot, receivedSnapshot);
+		Assert.AreEqual(0, snapshot.EnumerationCount);
 	}
 
 	[TestMethod]
@@ -302,6 +326,28 @@ public sealed class EnumerationSnapshotCoalescerTests
 			ScheduleCount++;
 			return callback();
 		}
+	}
+
+	private sealed class TrackingCollection : IReadOnlyCollection<int>
+	{
+		private readonly int[] values;
+
+		public TrackingCollection(params int[] values)
+		{
+			this.values = values;
+		}
+
+		public int Count => values.Length;
+
+		public int EnumerationCount { get; private set; }
+
+		public IEnumerator<int> GetEnumerator()
+		{
+			EnumerationCount++;
+			return ((IEnumerable<int>)values).GetEnumerator();
+		}
+
+		IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 	}
 
 	private sealed class ControlledDelay
