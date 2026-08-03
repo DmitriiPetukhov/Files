@@ -1059,10 +1059,22 @@ namespace Files.App.ViewModels
 			{
 				if (snapshot.Count == 0)
 				{
-					if (propagateExceptions)
-						await dispatcherQueue.EnqueueAsync(ClearDisplayOnUi);
+					// Empty snapshots use the same navigation guard as populated snapshots;
+					// otherwise a queued clear can erase the next folder after cancellation.
+					void ClearDisplayIfCurrentOnUi()
+					{
+						if (cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
+							return;
+
+						ClearDisplayOnUi();
+					}
+
+					if (dispatcherQueue.HasThreadAccess)
+						ClearDisplayIfCurrentOnUi();
+					else if (propagateExceptions)
+						await dispatcherQueue.EnqueueAsync(ClearDisplayIfCurrentOnUi);
 					else
-						await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplayOnUi);
+						await dispatcherQueue.EnqueueOrInvokeAsync(ClearDisplayIfCurrentOnUi);
 
 					return;
 				}
