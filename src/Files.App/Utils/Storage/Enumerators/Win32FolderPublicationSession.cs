@@ -5,22 +5,22 @@ using System.Collections.Immutable;
 
 namespace Files.App.Utils.Storage;
 
-internal sealed class Win32FolderPublicationSession<T>
+internal sealed class FolderPublicationSession<T>
 {
 	private readonly object syncRoot = new();
 	// Immutable roots can cross the worker-to-dispatcher boundary safely. The lock protects
 	// the current root and counters while a new root is being built from a batch.
-	private readonly Win32IncrementalSortedAccumulator<T> accumulator;
+	private readonly IncrementalSortedAccumulator<T> accumulator;
 	private readonly Func<T, bool>? countsTowardPrimary;
-	private readonly Win32PublicationDiagnostics? diagnostics;
+	private readonly FolderPublicationDiagnostics? diagnostics;
 	private bool isActive = true;
 	private int accumulatedCount;
 	private int primaryCount;
 	private int publicationCount;
 
-	public Win32FolderPublicationSession(IComparer<T> comparer, Func<T, bool>? countsTowardPrimary = null, Win32PublicationDiagnostics? diagnostics = null)
+	public FolderPublicationSession(IComparer<T> comparer, Func<T, bool>? countsTowardPrimary = null, FolderPublicationDiagnostics? diagnostics = null)
 	{
-		accumulator = new Win32IncrementalSortedAccumulator<T>(comparer);
+		accumulator = new IncrementalSortedAccumulator<T>(comparer);
 		this.countsTowardPrimary = countsTowardPrimary;
 		this.diagnostics = diagnostics;
 	}

@@ -12,7 +12,7 @@ public sealed class Win32IncrementalSortedAccumulatorTests
 	[TestMethod]
 	public void AddsEachBatchToOneOrderedSnapshot()
 	{
-		var accumulator = new Win32IncrementalSortedAccumulator<int>(Comparer<int>.Default);
+		var accumulator = new IncrementalSortedAccumulator<int>(Comparer<int>.Default);
 
 		var firstSnapshot = accumulator.AddBatch(new[] { 7, 1, 5 });
 		var secondSnapshot = accumulator.AddBatch(new[] { 4, 2 });
@@ -24,7 +24,7 @@ public sealed class Win32IncrementalSortedAccumulatorTests
 	[TestMethod]
 	public void PreviousSnapshotRemainsUnchangedAfterNextBatch()
 	{
-		var accumulator = new Win32IncrementalSortedAccumulator<int>(Comparer<int>.Default);
+		var accumulator = new IncrementalSortedAccumulator<int>(Comparer<int>.Default);
 
 		var firstSnapshot = accumulator.AddBatch(new[] { 3, 1 });
 		_ = accumulator.AddBatch(new[] { 2 });
@@ -35,7 +35,7 @@ public sealed class Win32IncrementalSortedAccumulatorTests
 	[TestMethod]
 	public void RetainsItemsThatShareThePrimarySortValue()
 	{
-		var accumulator = new Win32IncrementalSortedAccumulator<SortValue>(SortValueComparer.Instance);
+		var accumulator = new IncrementalSortedAccumulator<SortValue>(SortValueComparer.Instance);
 
 		var snapshot = accumulator.AddBatch(new[]
 		{

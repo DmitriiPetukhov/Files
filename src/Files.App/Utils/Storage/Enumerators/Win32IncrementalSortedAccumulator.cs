@@ -5,12 +5,12 @@ using System.Collections.Immutable;
 
 namespace Files.App.Utils.Storage;
 
-internal sealed class Win32IncrementalSortedAccumulator<T>
+internal sealed class IncrementalSortedAccumulator<T>
 {
 	private IComparer<T> comparer;
 	private ImmutableSortedSet<T> currentRoot;
 
-	public Win32IncrementalSortedAccumulator(IComparer<T> comparer)
+	public IncrementalSortedAccumulator(IComparer<T> comparer)
 	{
 		ArgumentNullException.ThrowIfNull(comparer);
 

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Files.App.Utils.Storage;
 
-internal readonly record struct Win32PublicationDiagnosticEvent(
+internal readonly record struct FolderPublicationDiagnosticEvent(
 	string Phase,
 	int SessionSequence,
 	int PublicationSequence,
@@ -16,14 +16,14 @@ internal readonly record struct Win32PublicationDiagnosticEvent(
 	int PrimaryCount,
 	long ElapsedMilliseconds);
 
-internal sealed class Win32PublicationDiagnostics
+internal sealed class FolderPublicationDiagnostics
 {
 	private static int nextSessionSequence;
-	private readonly Action<Win32PublicationDiagnosticEvent>? eventSink;
+	private readonly Action<FolderPublicationDiagnosticEvent>? eventSink;
 	private readonly long startedTimestamp = Stopwatch.GetTimestamp();
 	private int publicationSequence;
 
-	public Win32PublicationDiagnostics(Action<Win32PublicationDiagnosticEvent>? eventSink = null, int? sessionSequence = null)
+	public FolderPublicationDiagnostics(Action<FolderPublicationDiagnosticEvent>? eventSink = null, int? sessionSequence = null)
 	{
 		this.eventSink = eventSink;
 		SessionSequence = sessionSequence ?? Interlocked.Increment(ref nextSessionSequence);
@@ -39,7 +39,7 @@ internal sealed class Win32PublicationDiagnostics
 
 	private void Record(string phase, int payloadCount, int accumulatedCount, int primaryCount, Exception? exception)
 	{
-		var diagnosticEvent = new Win32PublicationDiagnosticEvent(
+		var diagnosticEvent = new FolderPublicationDiagnosticEvent(
 			phase,
 			SessionSequence,
 			Interlocked.Increment(ref publicationSequence),
@@ -57,7 +57,7 @@ internal sealed class Win32PublicationDiagnostics
 		if (exception is null)
 		{
 			App.Logger.LogDebug(
-				"Win32 folder publication phase={Phase} session={SessionSequence} publication={PublicationSequence} payload={PayloadCount} accumulated={AccumulatedCount} primary={PrimaryCount} elapsedMs={ElapsedMilliseconds}",
+				"Folder publication phase={Phase} session={SessionSequence} publication={PublicationSequence} payload={PayloadCount} accumulated={AccumulatedCount} primary={PrimaryCount} elapsedMs={ElapsedMilliseconds}",
 				diagnosticEvent.Phase,
 				diagnosticEvent.SessionSequence,
 				diagnosticEvent.PublicationSequence,
@@ -70,7 +70,7 @@ internal sealed class Win32PublicationDiagnostics
 		{
 			App.Logger.LogWarning(
 				exception,
-				"Win32 folder publication phase={Phase} session={SessionSequence} publication={PublicationSequence} payload={PayloadCount} accumulated={AccumulatedCount} primary={PrimaryCount} elapsedMs={ElapsedMilliseconds}",
+				"Folder publication phase={Phase} session={SessionSequence} publication={PublicationSequence} payload={PayloadCount} accumulated={AccumulatedCount} primary={PrimaryCount} elapsedMs={ElapsedMilliseconds}",
 				diagnosticEvent.Phase,
 				diagnosticEvent.SessionSequence,
 				diagnosticEvent.PublicationSequence,

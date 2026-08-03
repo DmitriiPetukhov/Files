@@ -13,7 +13,7 @@ public sealed class Win32FolderPublicationSessionTests
 	[TestMethod]
 	public void AppendsSortedBatchesAndReplacesFinalRoot()
 	{
-		var session = new Win32FolderPublicationSession<int>(Comparer<int>.Default);
+		var session = new FolderPublicationSession<int>(Comparer<int>.Default);
 
 		Assert.IsTrue(session.TryAppend(new[] { 3, 1 }, CancellationToken.None, out var firstRoot));
 		CollectionAssert.AreEqual(new[] { 1, 3 }, firstRoot!.ToArray());
@@ -25,7 +25,7 @@ public sealed class Win32FolderPublicationSessionTests
 	[TestMethod]
 	public void CancellationRejectsNewBatchesAndDoesNotChangeRoot()
 	{
-		var session = new Win32FolderPublicationSession<int>(Comparer<int>.Default);
+		var session = new FolderPublicationSession<int>(Comparer<int>.Default);
 		Assert.IsTrue(session.TryAppend(new[] { 1 }, CancellationToken.None, out _));
 
 		session.Cancel();

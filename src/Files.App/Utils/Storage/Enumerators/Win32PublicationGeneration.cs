@@ -3,7 +3,7 @@
 
 namespace Files.App.Utils.Storage;
 
-internal sealed class Win32PublicationGeneration
+internal sealed class FolderEnumerationGeneration
 {
 	private long nextGeneration;
 	private long activeGeneration;

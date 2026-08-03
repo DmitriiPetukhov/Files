@@ -13,9 +13,9 @@ public sealed class Win32PublicationDiagnosticsTests
 	[TestMethod]
 	public void RecordsSafePublicationPhasesAndCounters()
 	{
-		var events = new List<Win32PublicationDiagnosticEvent>();
-		var diagnostics = new Win32PublicationDiagnostics(events.Add, sessionSequence: 17);
-		var session = new Win32FolderPublicationSession<int>(Comparer<int>.Default, diagnostics: diagnostics);
+		var events = new List<FolderPublicationDiagnosticEvent>();
+		var diagnostics = new FolderPublicationDiagnostics(events.Add, sessionSequence: 17);
+		var session = new FolderPublicationSession<int>(Comparer<int>.Default, diagnostics: diagnostics);
 
 		Assert.IsTrue(session.TryAppend(new[] { 1, 2 }, CancellationToken.None, out _));
 		Assert.IsTrue(session.TryReplaceFinal(new[] { 3, 4 }, CancellationToken.None, out _));

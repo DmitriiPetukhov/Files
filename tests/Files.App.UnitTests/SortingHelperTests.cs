@@ -36,7 +36,7 @@ public sealed class SortingHelperTests
 			CreateFolder("file2"),
 			CreateFolder("file1")
 		};
-		var session = new Win32FolderPublicationSession<ListedItem>(
+		var session = new FolderPublicationSession<ListedItem>(
 			SortingHelper.GetComparer(SortOption.Name, SortDirection.Ascending, true, false));
 
 		Assert.IsTrue(session.TryAppend(new[] { items[0] }, CancellationToken.None, out _));
@@ -103,7 +103,7 @@ public sealed class SortingHelperTests
 	{
 		var first = CreateFolder("a");
 		var second = CreateFolder("b");
-		var session = new Win32FolderPublicationSession<ListedItem>(
+		var session = new FolderPublicationSession<ListedItem>(
 			SortingHelper.GetComparer(SortOption.FileTag, SortDirection.Ascending, true, false));
 
 		Assert.IsTrue(session.TryAppend(new[] { first, second }, CancellationToken.None, out _));

@@ -9,7 +9,7 @@ public sealed class Win32PublicationGenerationTests
 	[TestMethod]
 	public void CompletingOldGenerationDoesNotDeactivateNewGeneration()
 	{
-		var generations = new Win32PublicationGeneration();
+		var generations = new FolderEnumerationGeneration();
 		var firstGeneration = generations.Start();
 		var secondGeneration = generations.Start();
 

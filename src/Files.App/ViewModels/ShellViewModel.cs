@@ -175,7 +175,7 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource updateTagGroupCTS;
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
-		private readonly Win32PublicationGeneration nativePublicationGeneration = new();
+		private readonly FolderEnumerationGeneration folderEnumerationGeneration = new();
 		private readonly SnapshotApplicationGeneration snapshotApplicationGeneration = new();
 
 		public event EventHandler FocusFilterHeader;
@@ -1234,7 +1234,7 @@ namespace Files.App.ViewModels
 
 		private bool RestartActiveNativePublicationIfNeeded()
 		{
-			if (!IsLoadingItems || !nativePublicationGeneration.IsActive)
+			if (!IsLoadingItems || !folderEnumerationGeneration.IsActive)
 				return false;
 
 			// RefreshItems uses the existing cancellation path, so the old session and its
@@ -2275,53 +2275,30 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
-					// The session owns sorted worker snapshots, the coalescer owns dispatcher timing,
-					// and the enumerator owns batch thresholds. Their cleanup is coordinated below.
-					var publicationDiagnostics = new Win32PublicationDiagnostics();
-					var publicationGeneration = nativePublicationGeneration.Start();
+					var publicationGeneration = folderEnumerationGeneration.Start();
 					IComparer<ListedItem> CreateCurrentSortComparer()
 						=> SortingHelper.GetComparer(
 						folderSettings.DirectorySortOption,
 						folderSettings.DirectorySortDirection,
 						folderSettings.SortDirectoriesAlongsideFiles,
 						folderSettings.SortFilesFirst);
-					var publicationSession = new Win32FolderPublicationSession<ListedItem>(CreateCurrentSortComparer(),
-						item => !item.IsAlternateStream,
-						publicationDiagnostics);
-					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
-						async (snapshot, token) =>
-						{
-							await ApplyFilesAndFoldersSnapshotAsync(snapshot, token, propagateExceptions: true);
-							var counts = publicationSession.GetCounts();
-							publicationDiagnostics.Debug("coalesced", snapshot.Count, counts.AccumulatedCount, counts.PrimaryCount);
-						},
+					var publicationCoordinator = new FolderPublicationCoordinator<ListedItem>(
+						CreateCurrentSortComparer(),
+						(snapshot, token) => ApplyFilesAndFoldersSnapshotAsync(snapshot, token, propagateExceptions: true),
 						new DispatcherFolderSnapshotScheduler(dispatcherQueue),
-						exception =>
-						{
-							var counts = publicationSession.GetCounts();
-							publicationDiagnostics.Warning("failed", 0, counts.AccumulatedCount, counts.PrimaryCount, exception);
-						});
+						item => !item.IsAlternateStream);
+					var enumerationSource = FolderEnumerationSourceFactory.Create(path, hFile, findData);
 
 					try
 					{
 						await Task.Run(async () =>
 						{
-							List<ListedItem> fileList = await Win32StorageEnumerator.ListEntries(path, hFile, findData, cancellationToken, -1, intermediateAction: (intermediateList) =>
-							{
-								if (publicationSession.TryAppend(intermediateList, cancellationToken, out var snapshot))
-									snapshotCoalescer.Submit(snapshot!, cancellationToken);
-
-								return Task.CompletedTask;
-							});
-
 							// Intermediate roots are opportunistic; the completed enumeration is authoritative.
-							if (publicationSession.TryReplaceFinal(fileList, CreateCurrentSortComparer(), cancellationToken, out var finalSnapshot))
-							{
-								filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);
-								snapshotCoalescer.SubmitFinal(finalSnapshot, cancellationToken);
-							}
-
-							await snapshotCoalescer.DrainAsync(cancellationToken, retryPendingSnapshot: true);
+							IReadOnlyCollection<ListedItem> fileList = await publicationCoordinator.EnumerateAsync(
+								enumerationSource,
+								cancellationToken,
+								CreateCurrentSortComparer());
+							filesAndFolders = new ConcurrentCollection<ListedItem>(fileList);
 						}, cancellationToken);
 
 						// Not awaited here: with Low priority these don't run until the UI thread goes idle
@@ -2338,9 +2315,8 @@ namespace Files.App.ViewModels
 					}
 					finally
 					{
-						publicationSession.Cancel();
-						await snapshotCoalescer.CancelAsync();
-						nativePublicationGeneration.Complete(publicationGeneration);
+						await publicationCoordinator.CancelAsync();
+						folderEnumerationGeneration.Complete(publicationGeneration);
 					}
 
 					rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
