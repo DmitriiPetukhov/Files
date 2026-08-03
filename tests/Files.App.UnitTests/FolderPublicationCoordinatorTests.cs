@@ -74,6 +74,25 @@ public sealed class FolderPublicationCoordinatorTests
 		await coordinator.CancelAsync();
 	}
 
+	[TestMethod]
+	public async Task FinalListAdapterPreservesLegacySourceBehavior()
+	{
+		var publishedBatch = false;
+		var expected = new[] { 3, 1, 2 };
+		var source = new FinalListFolderEnumerationSource<int>(_ => Task.FromResult<IReadOnlyCollection<int>>(expected));
+
+		var actual = await source.EnumerateAsync(
+			_ =>
+			{
+				publishedBatch = true;
+				return Task.CompletedTask;
+			},
+			CancellationToken.None);
+
+		CollectionAssert.AreEqual(expected, actual.ToArray());
+		Assert.IsFalse(publishedBatch);
+	}
+
 	private static FolderPublicationCoordinator<int> CreateCoordinator(List<int[]> applied)
 		=> new(
 			Comparer<int>.Default,
