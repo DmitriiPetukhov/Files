@@ -67,11 +67,7 @@ namespace Files.App.Utils.Storage
 								iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 								if (areAlternateStreamsVisible)
-								{
-									var alternateStreams = EnumAdsForPath(file.ItemPath, file).ToList();
-									pendingBatch.AddRange(alternateStreams);
-									allAcceptedItems.AddRange(alternateStreams);
-								}
+									AddAlternateStreams(file.ItemPath, file, pendingBatch, allAcceptedItems);
 							}
 						}
 						else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
@@ -87,11 +83,7 @@ namespace Files.App.Utils.Storage
 									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
 
 									if (areAlternateStreamsVisible)
-									{
-										var alternateStreams = EnumAdsForPath(folder.ItemPath, folder).ToList();
-										pendingBatch.AddRange(alternateStreams);
-										allAcceptedItems.AddRange(alternateStreams);
-									}
+										AddAlternateStreams(folder.ItemPath, folder, pendingBatch, allAcceptedItems);
 
 									if (CalculateFolderSizes)
 									{
@@ -142,6 +134,19 @@ namespace Files.App.Utils.Storage
 		{
 			foreach (var ads in Win32Helper.GetAlternateStreams(itemPath))
 				yield return GetAlternateStream(ads, main);
+		}
+
+		private static void AddAlternateStreams(
+			string itemPath,
+			ListedItem main,
+			List<ListedItem> pendingBatch,
+			List<ListedItem> allAcceptedItems)
+		{
+			foreach (var alternateStream in EnumAdsForPath(itemPath, main))
+			{
+				pendingBatch.Add(alternateStream);
+				allAcceptedItems.Add(alternateStream);
+			}
 		}
 
 		public static ListedItem GetAlternateStream((string Name, long Size) ads, ListedItem main)
