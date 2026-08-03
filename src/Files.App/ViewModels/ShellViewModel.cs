@@ -175,6 +175,7 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource updateTagGroupCTS;
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
+		private readonly Win32PublicationGeneration nativePublicationGeneration = new();
 
 		public event EventHandler FocusFilterHeader;
 
@@ -481,6 +482,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedBySyncStatus));
 			OnPropertyChanged(nameof(IsSortedByFileTag));
 
+			if (RestartActiveNativePublicationIfNeeded())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -490,6 +494,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedAscending));
 			OnPropertyChanged(nameof(IsSortedDescending));
 
+			if (RestartActiveNativePublicationIfNeeded())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -498,6 +505,9 @@ namespace Files.App.ViewModels
 		{
 			OnPropertyChanged(nameof(AreDirectoriesSortedAlongsideFiles));
 
+			if (RestartActiveNativePublicationIfNeeded())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -505,6 +515,9 @@ namespace Files.App.ViewModels
 		public async Task UpdateSortFilesFirstAsync()
 		{
 			OnPropertyChanged(nameof(AreFilesSortedFirst));
+
+			if (RestartActiveNativePublicationIfNeeded())
+				return;
 
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
@@ -1204,6 +1217,17 @@ namespace Files.App.ViewModels
 			OrderEntries();
 
 			return Task.CompletedTask;
+		}
+
+		private bool RestartActiveNativePublicationIfNeeded()
+		{
+			if (!IsLoadingItems || !nativePublicationGeneration.IsActive)
+				return false;
+
+			// RefreshItems uses the existing cancellation path, so the old session and its
+			// callbacks are invalidated before the new sort settings are enumerated.
+			RefreshItems(null);
+			return true;
 		}
 
 		private void OrderGroups(CancellationToken token = default)
@@ -2241,6 +2265,7 @@ namespace Files.App.ViewModels
 					// The session owns sorted worker snapshots, the coalescer owns dispatcher timing,
 					// and the enumerator owns batch thresholds. Their cleanup is coordinated below.
 					var publicationDiagnostics = new Win32PublicationDiagnostics();
+					var publicationGeneration = nativePublicationGeneration.Start();
 					IComparer<ListedItem> CreateCurrentSortComparer()
 						=> SortingHelper.GetComparer(
 						folderSettings.DirectorySortOption,
@@ -2302,6 +2327,7 @@ namespace Files.App.ViewModels
 					{
 						publicationSession.Cancel();
 						snapshotCoalescer.Cancel();
+						nativePublicationGeneration.Complete(publicationGeneration);
 					}
 
 					rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
