@@ -2241,11 +2241,13 @@ namespace Files.App.ViewModels
 					// The session owns sorted worker snapshots, the coalescer owns dispatcher timing,
 					// and the enumerator owns batch thresholds. Their cleanup is coordinated below.
 					var publicationDiagnostics = new Win32PublicationDiagnostics();
-					var publicationSession = new Win32FolderPublicationSession<ListedItem>(SortingHelper.GetComparer(
+					IComparer<ListedItem> CreateCurrentSortComparer()
+						=> SortingHelper.GetComparer(
 						folderSettings.DirectorySortOption,
 						folderSettings.DirectorySortDirection,
 						folderSettings.SortDirectoriesAlongsideFiles,
-						folderSettings.SortFilesFirst),
+						folderSettings.SortFilesFirst);
+					var publicationSession = new Win32FolderPublicationSession<ListedItem>(CreateCurrentSortComparer(),
 						item => !item.IsAlternateStream,
 						publicationDiagnostics);
 					var snapshotCoalescer = new EnumerationSnapshotCoalescer<ListedItem>(
@@ -2275,7 +2277,7 @@ namespace Files.App.ViewModels
 							});
 
 							// Intermediate roots are opportunistic; the completed enumeration is authoritative.
-							if (publicationSession.TryReplaceFinal(fileList, cancellationToken, out var finalSnapshot))
+							if (publicationSession.TryReplaceFinal(fileList, CreateCurrentSortComparer(), cancellationToken, out var finalSnapshot))
 							{
 								filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);
 								snapshotCoalescer.Submit(finalSnapshot, cancellationToken);

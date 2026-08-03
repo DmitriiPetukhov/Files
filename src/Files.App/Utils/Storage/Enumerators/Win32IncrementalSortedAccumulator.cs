@@ -7,7 +7,7 @@ namespace Files.App.Utils.Storage;
 
 internal sealed class Win32IncrementalSortedAccumulator<T>
 {
-	private readonly IComparer<T> comparer;
+	private IComparer<T> comparer;
 	private ImmutableSortedSet<T> currentRoot;
 
 	public Win32IncrementalSortedAccumulator(IComparer<T> comparer)
@@ -32,9 +32,14 @@ internal sealed class Win32IncrementalSortedAccumulator<T>
 	}
 
 	public ImmutableSortedSet<T> Replace(IEnumerable<T> items)
+		=> Replace(items, comparer);
+
+	public ImmutableSortedSet<T> Replace(IEnumerable<T> items, IComparer<T> replacementComparer)
 	{
 		ArgumentNullException.ThrowIfNull(items);
+		ArgumentNullException.ThrowIfNull(replacementComparer);
 
+		comparer = replacementComparer;
 		var builder = ImmutableSortedSet.CreateBuilder(comparer);
 		builder.UnionWith(items);
 		currentRoot = builder.ToImmutable();

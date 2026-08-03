@@ -54,6 +54,9 @@ internal sealed class Win32FolderPublicationSession<T>
 	}
 
 	public bool TryReplaceFinal(IReadOnlyCollection<T> items, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
+		=> TryReplaceFinal(items, finalComparer: null, cancellationToken, out snapshot);
+
+	public bool TryReplaceFinal(IReadOnlyCollection<T> items, IComparer<T> finalComparer, CancellationToken cancellationToken, out ImmutableSortedSet<T>? snapshot)
 	{
 		ArgumentNullException.ThrowIfNull(items);
 
@@ -75,7 +78,7 @@ internal sealed class Win32FolderPublicationSession<T>
 
 			// Intermediate publication is best effort, so rebuild from the complete final list
 			// instead of assuming every detached batch reached the UI.
-			snapshot = accumulator.Replace(items);
+			snapshot = finalComparer is null ? accumulator.Replace(items) : accumulator.Replace(items, finalComparer);
 			accumulatedCount = snapshot.Count;
 			primaryCount = countsTowardPrimary is null ? items.Count : items.Count(countsTowardPrimary);
 			publicationCount++;

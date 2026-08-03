@@ -59,6 +59,26 @@ public sealed class SortingHelperTests
 		Assert.IsTrue(items.All(item => item.NameAccessCount == 1));
 	}
 
+	[TestMethod]
+	public void RebuildsFinalOrderWhenFileTagsChangeAfterEarlyPublication()
+	{
+		var first = CreateFolder("a");
+		var second = CreateFolder("b");
+		var session = new Win32FolderPublicationSession<ListedItem>(
+			SortingHelper.GetComparer(SortOption.FileTag, SortDirection.Ascending, true, false));
+
+		Assert.IsTrue(session.TryAppend(new[] { first, second }, CancellationToken.None, out _));
+		second.FileTags = ["tag"];
+
+		Assert.IsTrue(session.TryReplaceFinal(
+			new[] { first, second },
+			SortingHelper.GetComparer(SortOption.FileTag, SortDirection.Ascending, true, false),
+			CancellationToken.None,
+			out var finalSnapshot));
+
+		CollectionAssert.AreEqual(new[] { "b", "a" }, finalSnapshot!.Select(item => item.Name).ToArray());
+	}
+
 	private static ListedItem CreateFolder(string name)
 	{
 		var item = (ListedItem)RuntimeHelpers.GetUninitializedObject(typeof(ListedItem));
