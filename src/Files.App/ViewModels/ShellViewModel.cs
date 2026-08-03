@@ -174,6 +174,8 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource updateTagGroupCTS;
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
+		private IFolderPublicationSession<ListedItem>? folderPublicationSession;
+		private readonly FolderPublicationSnapshotGate folderPublicationSnapshotGate = new();
 
 		public event EventHandler FocusFilterHeader;
 
@@ -480,6 +482,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedBySyncStatus));
 			OnPropertyChanged(nameof(IsSortedByFileTag));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -489,6 +494,9 @@ namespace Files.App.ViewModels
 			OnPropertyChanged(nameof(IsSortedAscending));
 			OnPropertyChanged(nameof(IsSortedDescending));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -497,6 +505,9 @@ namespace Files.App.ViewModels
 		{
 			OnPropertyChanged(nameof(AreDirectoriesSortedAlongsideFiles));
 
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
+
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
 		}
@@ -504,6 +515,9 @@ namespace Files.App.ViewModels
 		public async Task UpdateSortFilesFirstAsync()
 		{
 			OnPropertyChanged(nameof(AreFilesSortedFirst));
+
+			if (await TryRebuildFolderPublicationIndexAsync())
+				return;
 
 			await OrderFilesAndFoldersAsync();
 			await ApplyFilesAndFoldersChangesAsync();
@@ -886,6 +900,8 @@ namespace Files.App.ViewModels
 		public void CancelLoadAndClearFiles()
 		{
 			Debug.WriteLine("CancelLoadAndClearFiles");
+			folderPublicationSession?.Cancel();
+			folderPublicationSession = null;
 			CloseWatcher();
 			CancelNetworkAvailabilityUpdate();
 			IsNetworkDiscoveryInfoBarOpen = false;
@@ -1156,6 +1172,48 @@ namespace Files.App.ViewModels
 			OrderEntries();
 
 			return Task.CompletedTask;
+		}
+
+		private async Task<bool> TryRebuildFolderPublicationIndexAsync()
+		{
+			return await folderPublicationSnapshotGate.ExecuteAsync(async () =>
+			{
+				var session = folderPublicationSession;
+				if (session is null)
+					return false;
+
+				var rebuildResult = await FolderPublicationSessionWorker.RebuildIndexAsync(
+					session,
+					SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
+						folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
+					addFilesCTS.Token);
+
+				if (!rebuildResult.Accepted || !ReferenceEquals(folderPublicationSession, session))
+					return false;
+
+				filesAndFolders = new ConcurrentCollection<ListedItem>(rebuildResult.Snapshot!);
+				await ApplyFilesAndFoldersChangesAsync();
+				return true;
+			});
+		}
+
+		private Task<bool> TryPublishFolderSnapshotAsync(
+			IFolderPublicationSession<ListedItem> session,
+			Func<(bool Accepted, IReadOnlyCollection<ListedItem>? Snapshot)> createSnapshot)
+		{
+			return folderPublicationSnapshotGate.ExecuteAsync(async () =>
+			{
+				if (!ReferenceEquals(folderPublicationSession, session))
+					return false;
+
+				var result = createSnapshot();
+				if (!result.Accepted)
+					return false;
+
+				filesAndFolders = new ConcurrentCollection<ListedItem>(result.Snapshot!);
+				await ApplyFilesAndFoldersChangesAsync();
+				return true;
+			});
 		}
 
 		private void OrderGroups(CancellationToken token = default)
@@ -2193,6 +2251,11 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
+					var publicationSession = new FolderPublicationSession<ListedItem>(
+						SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
+							folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst));
+					folderPublicationSession = publicationSession;
+
 					try
 					{
 						await Task.Run(async () =>
@@ -2200,16 +2263,23 @@ namespace Files.App.ViewModels
 							IFolderEnumerationSource<ListedItem> source = new Win32FolderEnumerationSource(path, hFile, findData);
 							IReadOnlyCollection<ListedItem> finalItems = await source.EnumerateAsync(async intermediateList =>
 							{
-								filesAndFolders.AddRange(intermediateList);
-								await ApplyFilesAndFoldersChangesAsync();
+								if (!await TryPublishFolderSnapshotAsync(publicationSession, () =>
+								{
+									var accepted = publicationSession.TryAppend(intermediateList, cancellationToken, out var snapshot);
+									return (accepted, snapshot);
+								}))
+									return;
 							}, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
 								return;
 
-							filesAndFolders = new ConcurrentCollection<ListedItem>(finalItems);
-							await OrderFilesAndFoldersAsync();
-							await ApplyFilesAndFoldersChangesAsync();
+							if (!await TryPublishFolderSnapshotAsync(publicationSession, () =>
+							{
+								var accepted = publicationSession.TryReplaceFinal(finalItems, cancellationToken, out var snapshot);
+								return (accepted, snapshot);
+							}))
+								return;
 							// Not awaited here: with Low priority these don't run until the UI thread goes idle
 							// after the final list update, which would delay load completion and watcher setup.
 							// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.

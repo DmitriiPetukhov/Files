@@ -34,6 +34,18 @@ internal interface IFolderPublicationSession<T>
 		out IReadOnlyCollection<T>? snapshot);
 
 	/// <summary>
+	/// Rebuilds only the ordered index while retaining the canonical accepted items.
+	/// </summary>
+	/// <param name="itemComparer">The comparer for the new sort configuration.</param>
+	/// <param name="cancellationToken">The token for the current navigation.</param>
+	/// <param name="snapshot">The rebuilt snapshot when the operation is accepted.</param>
+	/// <returns><see langword="true"/> when the rebuild is accepted.</returns>
+	bool TryRebuildIndex(
+		IComparer<T> itemComparer,
+		CancellationToken cancellationToken,
+		out IReadOnlyCollection<T>? snapshot);
+
+	/// <summary>
 	/// Invalidates the session so stale callbacks cannot change its state.
 	/// </summary>
 	void Cancel();
