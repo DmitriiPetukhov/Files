@@ -5,6 +5,9 @@ using WIN32_FIND_DATA = Files.App.Helpers.Win32PInvoke.WIN32_FIND_DATA;
 
 namespace Files.App.Utils.Storage;
 
+/// <summary>
+/// Adapts native Win32 folder enumeration to the provider-neutral source contract.
+/// </summary>
 internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource<ListedItem>
 {
 	private readonly string path;
@@ -18,6 +21,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource<Li
 		this.findData = findData;
 	}
 
+	/// <inheritdoc />
 	public async Task<IReadOnlyCollection<ListedItem>> EnumerateAsync(
 		Func<IReadOnlyCollection<ListedItem>, Task> publishBatchAsync,
 		CancellationToken cancellationToken)
@@ -30,6 +34,6 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource<Li
 			findData,
 			cancellationToken,
 			-1,
-			intermediateAction: async intermediateList => await publishBatchAsync(intermediateList));
+			intermediateAction: publishBatchAsync);
 	}
 }

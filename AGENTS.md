@@ -13,6 +13,7 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 - For Win32, COM, Shell, clipboard, hotkey, and file operation interop, prefer `src/Files.App.CsWin32`, `NativeMethods.txt`, and existing wrappers/helpers.
 - Avoid ad hoc P/Invoke declarations when CsWin32 or existing interop code can cover the API.
 - Do not edit generated CsWin32 output directly. Update source declarations, wrappers, or generator inputs instead.
+- Always use `LogPathHelper.GetPathIdentifier` when logging file or folder paths; never log raw paths.
 - For UI work, use existing XAML resources, controls, converters, commands, and localization patterns. Avoid one-off styles or hard-coded user-visible strings.
 - Start by identifying the smallest relevant project, feature area, and files for the task.
 - Read nearby code before adding new abstractions. Prefer existing WinUI, MVVM, service, command, and storage patterns.
