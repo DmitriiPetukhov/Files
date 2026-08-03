@@ -4,7 +4,9 @@
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using System.IO;
+using System.Runtime.InteropServices;
 using Windows.Storage;
+using Windows.Win32.Foundation;
 using FileAttributes = System.IO.FileAttributes;
 
 namespace Files.App.Utils.Storage
@@ -31,6 +33,7 @@ namespace Files.App.Utils.Storage
 			var pendingBatch = new List<ListedItem>();
 			var allAcceptedItems = new List<ListedItem>();
 			var count = 0;
+			var stoppedBeforeFindNext = false;
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
 			bool CalculateFolderSizes = userSettingsService.FoldersSettingsService.CalculateFolderSizes;
@@ -41,83 +44,98 @@ namespace Files.App.Utils.Storage
 
 			var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) && !string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
 
-			do
+			try
 			{
-				var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
-				var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
-				var startWithDot = findData.cFileName.StartsWith('.');
-				if ((!isHidden ||
-					(showHiddenItems &&
-					(!isSystem || showProtectedSystemFiles))) &&
-					(!startWithDot || showDotFiles))
+				do
 				{
-					if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) != FileAttributes.Directory)
+					var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
+					var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
+					var startWithDot = findData.cFileName.StartsWith('.');
+					if ((!isHidden ||
+						(showHiddenItems &&
+						(!isSystem || showProtectedSystemFiles))) &&
+						(!startWithDot || showDotFiles))
 					{
-						var file = await GetFile(findData, path, isGitRepo, cancellationToken);
-						if (file is not null)
+						if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) != FileAttributes.Directory)
 						{
-							pendingBatch.Add(file);
-							allAcceptedItems.Add(file);
-							++count;
-							iconWarmUpQueue.TryQueue(file, false, cancellationToken);
-
-							if (areAlternateStreamsVisible)
+							var file = await GetFile(findData, path, isGitRepo, cancellationToken);
+							if (file is not null)
 							{
-								var alternateStreams = EnumAdsForPath(file.ItemPath, file).ToList();
-								pendingBatch.AddRange(alternateStreams);
-								allAcceptedItems.AddRange(alternateStreams);
-							}
-						}
-					}
-					else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
-					{
-						if (findData.cFileName != "." && findData.cFileName != "..")
-						{
-							var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
-							if (folder is not null)
-							{
-								pendingBatch.Add(folder);
-								allAcceptedItems.Add(folder);
+								pendingBatch.Add(file);
+								allAcceptedItems.Add(file);
 								++count;
-								iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+								iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 								if (areAlternateStreamsVisible)
 								{
-									var alternateStreams = EnumAdsForPath(folder.ItemPath, folder).ToList();
+									var alternateStreams = EnumAdsForPath(file.ItemPath, file).ToList();
 									pendingBatch.AddRange(alternateStreams);
 									allAcceptedItems.AddRange(alternateStreams);
 								}
-
-								if (CalculateFolderSizes)
+							}
+						}
+						else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
+						{
+							if (findData.cFileName != "." && findData.cFileName != "..")
+							{
+								var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
+								if (folder is not null)
 								{
-									if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
+									pendingBatch.Add(folder);
+									allAcceptedItems.Add(folder);
+									++count;
+									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+
+									if (areAlternateStreamsVisible)
 									{
-										folder.FileSizeBytes = (long)size;
-										folder.FileSize = size.ToSizeString();
+										var alternateStreams = EnumAdsForPath(folder.ItemPath, folder).ToList();
+										pendingBatch.AddRange(alternateStreams);
+										allAcceptedItems.AddRange(alternateStreams);
 									}
 
-									_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
+									if (CalculateFolderSizes)
+									{
+										if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
+										{
+											folder.FileSizeBytes = (long)size;
+											folder.FileSize = size.ToSizeString();
+										}
+
+										_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
+									}
 								}
 							}
 						}
 					}
-				}
 
-				if (cancellationToken.IsCancellationRequested || count == countLimit)
-					break;
+					if (cancellationToken.IsCancellationRequested || count == countLimit)
+					{
+						stoppedBeforeFindNext = true;
+						break;
+					}
 
-				if (intermediateAction is not null && pendingBatch.Count > 0 && (count == 32 || sampler.CheckNow()))
+					if (intermediateAction is not null && pendingBatch.Count > 0 && (count == 32 || sampler.CheckNow()))
+					{
+						await intermediateAction(pendingBatch);
+
+						// clear the temporary list every time we do an intermediate action
+						pendingBatch.Clear();
+					}
+				} while (Win32PInvoke.FindNextFile(hFile, out findData));
+
+				if (!stoppedBeforeFindNext)
 				{
-					await intermediateAction(pendingBatch);
-
-					// clear the temporary list every time we do an intermediate action
-					pendingBatch.Clear();
+					var errorCode = Marshal.GetLastWin32Error();
+					if (errorCode != (int)WIN32_ERROR.ERROR_NO_MORE_FILES)
+						throw new Win32Exception(errorCode);
 				}
-			} while (Win32PInvoke.FindNextFile(hFile, out findData));
 
-			Win32PInvoke.FindClose(hFile);
-
-			return allAcceptedItems;
+				return allAcceptedItems;
+			}
+			finally
+			{
+				Win32PInvoke.FindClose(hFile);
+			}
 		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
