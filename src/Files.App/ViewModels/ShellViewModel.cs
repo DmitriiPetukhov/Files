@@ -176,6 +176,7 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
 		private readonly Win32PublicationGeneration nativePublicationGeneration = new();
+		private readonly SnapshotApplicationGeneration snapshotApplicationGeneration = new();
 
 		public event EventHandler FocusFilterHeader;
 
@@ -1066,6 +1067,8 @@ namespace Files.App.ViewModels
 
 		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
 		{
+			var snapshotGeneration = snapshot.Count == 0 ? 0 : snapshotApplicationGeneration.Start();
+
 			// Native publication must observe apply failures so the coalescer can retain and
 			// retry a final snapshot. Other refresh callers preserve the existing safe logging path.
 			try
@@ -1094,7 +1097,15 @@ namespace Files.App.ViewModels
 
 				if (dispatcherQueue.HasThreadAccess)
 				{
-					ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
+					// Always queue from the UI thread. Applying inline here can let a newer
+					// snapshot run ahead of an older callback already queued by a background caller.
+					await dispatcherQueue.EnqueueAsync(() =>
+					{
+						if (snapshotApplicationGeneration.IsCurrent(snapshotGeneration))
+							ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
+
+						return Task.CompletedTask;
+					});
 					return;
 				}
 
@@ -1112,7 +1123,8 @@ namespace Files.App.ViewModels
 					{
 						try
 						{
-							ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
+							if (snapshotApplicationGeneration.IsCurrent(snapshotGeneration))
+								ApplyFilesAndFoldersSnapshotOnUi(snapshot, cancellationToken);
 						}
 						finally
 						{
