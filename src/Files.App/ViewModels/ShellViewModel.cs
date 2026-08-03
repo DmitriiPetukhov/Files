@@ -1053,6 +1053,8 @@ namespace Files.App.ViewModels
 
 		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
 		{
+			// Native publication must observe apply failures so the coalescer can retain and
+			// retry a final snapshot. Other refresh callers preserve the existing safe logging path.
 			try
 			{
 				if (snapshot.Count == 0)
@@ -2224,6 +2226,8 @@ namespace Files.App.ViewModels
 				}
 				else
 				{
+					// The session owns sorted worker snapshots, the coalescer owns dispatcher timing,
+					// and the enumerator owns batch thresholds. Their cleanup is coordinated below.
 					var publicationDiagnostics = new Win32PublicationDiagnostics();
 					var publicationSession = new Win32FolderPublicationSession<ListedItem>(SortingHelper.GetComparer(
 						folderSettings.DirectorySortOption,
@@ -2258,6 +2262,7 @@ namespace Files.App.ViewModels
 								return Task.CompletedTask;
 							});
 
+							// Intermediate roots are opportunistic; the completed enumeration is authoritative.
 							if (publicationSession.TryReplaceFinal(fileList, cancellationToken, out var finalSnapshot))
 							{
 								filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);

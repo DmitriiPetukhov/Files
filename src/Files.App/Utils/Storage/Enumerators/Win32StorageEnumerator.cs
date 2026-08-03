@@ -30,6 +30,8 @@ namespace Files.App.Utils.Storage
 			Func<List<ListedItem>, Task> intermediateAction
 		)
 		{
+			// Keep final enumeration independent from early publication. A failed or canceled
+			// intermediate callback must not remove accepted items from the final result.
 			var finalItems = new List<ListedItem>();
 			var count = 0;
 			Win32EnumerationPublicationGate<ListedItem>? publicationGate = intermediateAction is null
@@ -45,6 +47,7 @@ namespace Files.App.Utils.Storage
 			{
 				finalItems.Add(item);
 
+				// Publication is opportunistic; the final list above remains authoritative.
 				if (publicationGate is not null)
 					await publicationGate.AddAsync(item, countsTowardThreshold, cancellationToken);
 			}

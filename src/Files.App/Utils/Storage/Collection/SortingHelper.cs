@@ -97,6 +97,8 @@ namespace Files.App.Utils.Storage
 						return nameComparison;
 				}
 
+				// ImmutableSortedSet treats comparer equality as a duplicate, so equal sort keys
+				// need a deterministic identity tie-breaker to retain distinct items.
 				return CompareIdentity(x, y);
 			}
 

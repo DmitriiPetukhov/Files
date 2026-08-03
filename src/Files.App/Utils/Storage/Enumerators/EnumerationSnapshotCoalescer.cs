@@ -12,6 +12,8 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 	private readonly IFolderSnapshotScheduler scheduler;
 	private readonly Action<Exception>? errorHandler;
 
+	// Only the newest immutable snapshot matters. One scheduled callback will consume it
+	// when the dispatcher is ready, coalescing submissions that arrive before then.
 	private IReadOnlyCollection<T>? pendingSnapshot;
 	private CancellationToken pendingCancellationToken;
 	private TaskCompletionSource<bool>? scheduledCompletion;
@@ -89,6 +91,8 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 				}
 				else if (!isCanceled && retryPendingSnapshot && !retryAttempted && pendingSnapshot is not null)
 				{
+					// The final publication may request one bounded retry after an apply failure.
+					// Intermediate failures remain observable without creating an unbounded loop.
 					if (pendingCancellationToken.IsCancellationRequested)
 					{
 						pendingSnapshot = null;
@@ -179,6 +183,8 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			{
 				callbackScheduled = false;
 
+				// Restore a failed snapshot only when no newer snapshot replaced it while
+				// the callback was running; newer state must always win.
 				if (applyFailed && !isCanceled && snapshot is not null && pendingSnapshot is null)
 				{
 					pendingSnapshot = snapshot;

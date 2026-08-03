@@ -21,6 +21,8 @@ internal sealed class DispatcherFolderSnapshotScheduler : IFolderSnapshotSchedul
 	{
 		ArgumentNullException.ThrowIfNull(callback);
 
+		// Inline execution on the UI thread keeps the coalescer completion tied to the
+		// actual apply instead of adding a nested dispatcher hop.
 		if (dispatcherQueue is null || dispatcherQueue.HasThreadAccess)
 			return callback();
 

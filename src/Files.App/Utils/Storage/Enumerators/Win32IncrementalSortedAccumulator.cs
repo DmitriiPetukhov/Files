@@ -22,6 +22,8 @@ internal sealed class Win32IncrementalSortedAccumulator<T>
 	{
 		ArgumentNullException.ThrowIfNull(batch);
 
+		// Keep one mutable builder cycle per batch. Freezing after each item would recreate
+		// immutable roots repeatedly and defeat incremental publication.
 		var builder = currentRoot.ToBuilder();
 		builder.UnionWith(batch);
 		currentRoot = builder.ToImmutable();

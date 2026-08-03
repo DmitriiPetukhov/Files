@@ -8,6 +8,8 @@ namespace Files.App.Utils.Storage;
 internal sealed class Win32FolderPublicationSession<T>
 {
 	private readonly object syncRoot = new();
+	// Immutable roots can cross the worker-to-dispatcher boundary safely. The lock protects
+	// the current root and counters while a new root is being built from a batch.
 	private readonly Win32IncrementalSortedAccumulator<T> accumulator;
 	private readonly Func<T, bool>? countsTowardPrimary;
 	private readonly Win32PublicationDiagnostics? diagnostics;
@@ -71,6 +73,8 @@ internal sealed class Win32FolderPublicationSession<T>
 				return false;
 			}
 
+			// Intermediate publication is best effort, so rebuild from the complete final list
+			// instead of assuming every detached batch reached the UI.
 			snapshot = accumulator.Replace(items);
 			accumulatedCount = snapshot.Count;
 			primaryCount = countsTowardPrimary is null ? items.Count : items.Count(countsTowardPrimary);

@@ -17,6 +17,7 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 	private readonly int intermediateBatchSize;
 	private readonly TimeSpan batchTimeout;
 
+	// The payload can include alternate streams, while only primary items advance thresholds.
 	private List<T> pendingItems = new();
 	private int pendingPrimaryItemCount;
 	private CancellationTokenSource? batchTimerCancellation;
@@ -172,6 +173,8 @@ internal sealed class Win32EnumerationPublicationGate<T> : IAsyncDisposable
 
 		try
 		{
+			// Batches are detached under the state lock so enumeration can continue. The
+			// semaphore serializes callbacks and lets cancellation wait for the active one.
 			await publicationSemaphore.WaitAsync(cancellationToken);
 			try
 			{
