@@ -28,6 +28,48 @@ namespace Files.App.Utils.Storage
 			};
 		}
 
+		public static IComparer<ListedItem> GetComparer(SortOption directorySortOption, SortDirection directorySortDirection,
+			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
+		{
+			var orderFunc = GetSortFunc(directorySortOption);
+			var naturalStringComparer = NaturalStringComparer.GetForProcessor();
+
+			return Comparer<ListedItem>.Create((left, right) =>
+			{
+				if (!sortDirectoriesAlongsideFiles)
+				{
+					var priorityComparison = PrioritizeFilesOrFolders(left, sortFilesFirst).CompareTo(PrioritizeFilesOrFolders(right, sortFilesFirst));
+					if (priorityComparison != 0)
+						return priorityComparison;
+				}
+
+				if (directorySortOption == SortOption.FileTag)
+				{
+					var emptyTagComparison = string.IsNullOrEmpty(orderFunc(left) as string).CompareTo(string.IsNullOrEmpty(orderFunc(right) as string));
+					if (emptyTagComparison != 0)
+						return emptyTagComparison;
+				}
+
+				var valueComparison = directorySortOption == SortOption.Name
+					? naturalStringComparer.Compare(left.Name, right.Name)
+					: Comparer<object>.Default.Compare(orderFunc(left), orderFunc(right));
+				if (valueComparison != 0)
+					return directorySortDirection == SortDirection.Ascending ? valueComparison : -valueComparison;
+
+				if (directorySortOption != SortOption.Name)
+				{
+					var nameComparison = naturalStringComparer.Compare(left.Name, right.Name);
+					if (nameComparison != 0)
+						return directorySortDirection == SortDirection.Ascending ? nameComparison : -nameComparison;
+				}
+
+				return 0;
+			});
+
+			static bool PrioritizeFilesOrFolders(ListedItem listedItem, bool sortFilesFirst)
+			=> (listedItem.PrimaryItemAttribute == StorageItemTypes.File || listedItem.IsShortcut || listedItem.IsArchive) ^ sortFilesFirst;
+		}
+
 		public static IEnumerable<ListedItem> OrderFileList(IList<ListedItem> filesAndFolders, SortOption directorySortOption, SortDirection directorySortDirection,
 			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
 		{
