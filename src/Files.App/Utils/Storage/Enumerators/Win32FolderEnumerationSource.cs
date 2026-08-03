@@ -34,7 +34,6 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource<Li
 			findData,
 			cancellationToken,
 			-1,
-			intermediateAction: intermediateList =>
-				publishBatchAsync(intermediateList.ToArray()));
+			intermediateAction: publishBatchAsync);
 	}
 }
