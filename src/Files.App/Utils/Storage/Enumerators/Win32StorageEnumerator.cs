@@ -34,9 +34,9 @@ namespace Files.App.Utils.Storage
 			// intermediate callback must not remove accepted items from the final result.
 			var finalItems = new List<ListedItem>();
 			var count = 0;
-			Win32EnumerationPublicationGate<ListedItem>? publicationGate = intermediateAction is null
+			Win32EnumerationPublicationRunner<ListedItem>? publicationRunner = intermediateAction is null
 				? null
-				: new Win32EnumerationPublicationGate<ListedItem>(
+				: new Win32EnumerationPublicationRunner<ListedItem>(
 					batch => intermediateAction(new List<ListedItem>(batch)),
 					InitialPublicationBatchSize,
 					IntermediatePublicationBatchSize,
@@ -45,11 +45,12 @@ namespace Files.App.Utils.Storage
 
 			async Task AddItemAsync(ListedItem item, bool countsTowardThreshold = true)
 			{
-				finalItems.Add(item);
+				if (publicationRunner is null)
+					finalItems.Add(item);
+				else
+					await publicationRunner.AddAsync(item, countsTowardThreshold, cancellationToken);
 
 				// Publication is opportunistic; the final list above remains authoritative.
-				if (publicationGate is not null)
-					await publicationGate.AddAsync(item, countsTowardThreshold, cancellationToken);
 			}
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
@@ -130,15 +131,15 @@ namespace Files.App.Utils.Storage
 
 				} while (Win32PInvoke.FindNextFile(hFile, out findData));
 
-				if (publicationGate is not null)
-					await publicationGate.CompleteAsync(cancellationToken);
+				if (publicationRunner is not null)
+					finalItems = await publicationRunner.CompleteAsync(cancellationToken);
 
 				return finalItems;
 			}
 			finally
 			{
-				if (publicationGate is not null)
-					await publicationGate.CancelAsync();
+				if (publicationRunner is not null)
+					await publicationRunner.DisposeAsync();
 
 				Win32PInvoke.FindClose(hFile);
 			}
