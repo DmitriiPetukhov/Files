@@ -28,7 +28,8 @@ namespace Files.App.Utils.Storage
 		)
 		{
 			var sampler = new IntervalSampler(500);
-			var tempList = new List<ListedItem>();
+			var pendingBatch = new List<ListedItem>();
+			var allAcceptedItems = new List<ListedItem>();
 			var count = 0;
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
@@ -55,13 +56,16 @@ namespace Files.App.Utils.Storage
 						var file = await GetFile(findData, path, isGitRepo, cancellationToken);
 						if (file is not null)
 						{
-							tempList.Add(file);
+							pendingBatch.Add(file);
+							allAcceptedItems.Add(file);
 							++count;
 							iconWarmUpQueue.TryQueue(file, false, cancellationToken);
 
 							if (areAlternateStreamsVisible)
 							{
-								tempList.AddRange(EnumAdsForPath(file.ItemPath, file));
+								var alternateStreams = EnumAdsForPath(file.ItemPath, file).ToList();
+								pendingBatch.AddRange(alternateStreams);
+								allAcceptedItems.AddRange(alternateStreams);
 							}
 						}
 					}
@@ -72,12 +76,17 @@ namespace Files.App.Utils.Storage
 							var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
 							if (folder is not null)
 							{
-								tempList.Add(folder);
+								pendingBatch.Add(folder);
+								allAcceptedItems.Add(folder);
 								++count;
-							iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+								iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
 
 								if (areAlternateStreamsVisible)
-									tempList.AddRange(EnumAdsForPath(folder.ItemPath, folder));
+								{
+									var alternateStreams = EnumAdsForPath(folder.ItemPath, folder).ToList();
+									pendingBatch.AddRange(alternateStreams);
+									allAcceptedItems.AddRange(alternateStreams);
+								}
 
 								if (CalculateFolderSizes)
 								{
@@ -99,16 +108,16 @@ namespace Files.App.Utils.Storage
 
 				if (intermediateAction is not null && (count == 32 || sampler.CheckNow()))
 				{
-					await intermediateAction(tempList);
+					await intermediateAction(pendingBatch);
 
 					// clear the temporary list every time we do an intermediate action
-					tempList.Clear();
+					pendingBatch.Clear();
 				}
 			} while (Win32PInvoke.FindNextFile(hFile, out findData));
 
 			Win32PInvoke.FindClose(hFile);
 
-			return tempList;
+			return allAcceptedItems;
 		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
