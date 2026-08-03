@@ -123,6 +123,40 @@ public sealed class EnumerationSnapshotCoalescerTests
 	}
 
 	[TestMethod]
+	public async Task CooldownCoalescesIntermediateSnapshotsButFinalSnapshotBypassesIt()
+	{
+		var scheduler = new ImmediateScheduler();
+		var delay = new ControlledDelay();
+		var applied = new List<int[]>();
+		var now = DateTimeOffset.UnixEpoch;
+		var coalescer = new EnumerationSnapshotCoalescer<int>(
+			(snapshot, _) =>
+			{
+				applied.Add(snapshot.ToArray());
+				return Task.CompletedTask;
+			},
+			scheduler,
+			intermediateApplyCooldown: TimeSpan.FromMilliseconds(100),
+			delayAsync: delay.DelayAsync,
+			now: () => now);
+
+		coalescer.Submit(new[] { 1 }, CancellationToken.None);
+		await coalescer.DrainAsync(CancellationToken.None);
+
+		coalescer.Submit(new[] { 1, 2 }, CancellationToken.None);
+		var drain = coalescer.DrainAsync(CancellationToken.None);
+		await delay.Started.Task;
+
+		Assert.AreEqual(1, applied.Count);
+
+		coalescer.SubmitFinal(new[] { 1, 2, 3 }, CancellationToken.None);
+		await drain;
+
+		Assert.AreEqual(2, applied.Count);
+		CollectionAssert.AreEqual(new[] { 1, 2, 3 }, applied[1]);
+	}
+
+	[TestMethod]
 	public async Task CancellationCompletesDrainWithoutApplyingSnapshot()
 	{
 		var scheduler = new ManualScheduler();
@@ -243,6 +277,21 @@ public sealed class EnumerationSnapshotCoalescerTests
 		{
 			ScheduleCount++;
 			return callback();
+		}
+	}
+
+	private sealed class ControlledDelay
+	{
+		private readonly TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		public async Task DelayAsync(TimeSpan _, CancellationToken cancellationToken)
+		{
+			Started.TrySetResult(true);
+			var cancellation = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+			await Task.WhenAny(release.Task, cancellation);
+			cancellationToken.ThrowIfCancellationRequested();
 		}
 	}
 }

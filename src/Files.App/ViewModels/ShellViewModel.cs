@@ -2317,7 +2317,7 @@ namespace Files.App.ViewModels
 							if (publicationSession.TryReplaceFinal(fileList, CreateCurrentSortComparer(), cancellationToken, out var finalSnapshot))
 							{
 								filesAndFolders = new ConcurrentCollection<ListedItem>(finalSnapshot!);
-								snapshotCoalescer.Submit(finalSnapshot, cancellationToken);
+								snapshotCoalescer.SubmitFinal(finalSnapshot, cancellationToken);
 							}
 
 							await snapshotCoalescer.DrainAsync(cancellationToken, retryPendingSnapshot: true);
