@@ -79,6 +79,30 @@ public sealed class SortingHelperTests
 		CollectionAssert.AreEqual(new[] { "b", "a" }, finalSnapshot!.Select(item => item.Name).ToArray());
 	}
 
+	[TestMethod]
+	public void CachesFileTagSortKeysAcrossComparisons()
+	{
+		var items = Enumerable.Range(0, 16)
+			.Reverse()
+			.Select(index => CreateFolder($"item{index}"))
+			.ToArray();
+		var extractionCount = 0;
+		var comparer = SortingHelper.GetComparer(
+			SortOption.FileTag,
+			SortDirection.Ascending,
+			true,
+			false,
+			item =>
+			{
+				extractionCount++;
+				return item.FileTags?.FirstOrDefault() ?? string.Empty;
+			});
+
+		_ = items.OrderBy(item => item, comparer).ToArray();
+
+		Assert.AreEqual(items.Length, extractionCount);
+	}
+
 	private static ListedItem CreateFolder(string name)
 	{
 		var item = (ListedItem)RuntimeHelpers.GetUninitializedObject(typeof(ListedItem));

@@ -39,7 +39,13 @@ namespace Files.App.Utils.Storage
 		public static IComparer<ListedItem> GetComparer(SortOption directorySortOption, SortDirection directorySortDirection,
 			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
 		{
-			return new ListedItemComparer(directorySortOption, directorySortDirection, sortDirectoriesAlongsideFiles, sortFilesFirst);
+			return new ListedItemComparer(directorySortOption, directorySortDirection, sortDirectoriesAlongsideFiles, sortFilesFirst, GetSortFunc(directorySortOption));
+		}
+
+		internal static IComparer<ListedItem> GetComparer(SortOption directorySortOption, SortDirection directorySortDirection,
+			bool sortDirectoriesAlongsideFiles, bool sortFilesFirst, Func<ListedItem, object> orderFunc)
+		{
+			return new ListedItemComparer(directorySortOption, directorySortDirection, sortDirectoriesAlongsideFiles, sortFilesFirst, orderFunc);
 		}
 
 		private sealed class ListedItemComparer : IComparer<ListedItem>
@@ -55,13 +61,13 @@ namespace Files.App.Utils.Storage
 			private readonly bool sortFilesFirst;
 
 			public ListedItemComparer(SortOption directorySortOption, SortDirection directorySortDirection,
-				bool sortDirectoriesAlongsideFiles, bool sortFilesFirst)
+				bool sortDirectoriesAlongsideFiles, bool sortFilesFirst, Func<ListedItem, object> orderFunc)
 			{
 				this.directorySortOption = directorySortOption;
 				this.sortDirectoriesAlongsideFiles = sortDirectoriesAlongsideFiles;
 				this.sortFilesFirst = sortFilesFirst;
 				this.directionMultiplier = directorySortDirection == SortDirection.Ascending ? 1 : -1;
-				orderFunc = GetSortFunc(directorySortOption);
+				this.orderFunc = orderFunc;
 			}
 
 			public int Compare(ListedItem? x, ListedItem? y)
