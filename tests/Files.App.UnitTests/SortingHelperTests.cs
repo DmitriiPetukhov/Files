@@ -45,6 +45,45 @@ public sealed class SortingHelperTests
 		CollectionAssert.AreEqual(new[] { "file1", "file2", "file10" }, snapshot!.Select(item => item.Name).ToArray());
 	}
 
+	[DataTestMethod]
+	[DataRow(false, false, false)]
+	[DataRow(false, false, true)]
+	[DataRow(false, true, false)]
+	[DataRow(false, true, true)]
+	[DataRow(true, false, false)]
+	[DataRow(true, false, true)]
+	public void PreservesGroupingAndDirectionOrdering(bool sortDirectoriesAlongsideFiles, bool sortFilesFirst, bool descending)
+	{
+		var items = new[]
+		{
+			CreateFolder("folder2"),
+			CreateFile("file10"),
+			CreateFolder("folder1"),
+			CreateFile("file1")
+		};
+		var comparer = SortingHelper.GetComparer(
+			SortOption.Name,
+			descending ? SortDirection.Descending : SortDirection.Ascending,
+			sortDirectoriesAlongsideFiles,
+			sortFilesFirst,
+			item => item.ItemNameRaw);
+
+		var sorted = items.OrderBy(item => item, comparer).Select(item => item.ItemNameRaw).ToArray();
+		var expected = sortDirectoriesAlongsideFiles
+			? descending
+				? new[] { "folder2", "folder1", "file10", "file1" }
+				: new[] { "file1", "file10", "folder1", "folder2" }
+			: sortFilesFirst
+				? descending
+					? new[] { "file10", "file1", "folder2", "folder1" }
+					: new[] { "file1", "file10", "folder1", "folder2" }
+				: descending
+					? new[] { "folder2", "folder1", "file10", "file1" }
+					: new[] { "folder1", "folder2", "file1", "file10" };
+
+		CollectionAssert.AreEqual(expected, sorted);
+	}
+
 	[TestMethod]
 	public void CachesPrimarySortKeysAcrossComparisons()
 	{
@@ -109,6 +148,13 @@ public sealed class SortingHelperTests
 		item.ItemNameRaw = name;
 		item.ItemPath = $"C:\\{name}";
 		item.PrimaryItemAttribute = Windows.Storage.StorageItemTypes.Folder;
+		return item;
+	}
+
+	private static ListedItem CreateFile(string name)
+	{
+		var item = CreateFolder(name);
+		item.PrimaryItemAttribute = Windows.Storage.StorageItemTypes.File;
 		return item;
 	}
 
