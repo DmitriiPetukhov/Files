@@ -28,12 +28,16 @@ public sealed class Win32EnumerationPublicationGateTests
 	public async Task PublishesSubsequentBatchWhenThirtyTwoPrimaryItemsAreReady()
 	{
 		var published = new List<int[]>();
-		var gate = CreateGate(published);
+		var delay = new ControlledDelay();
+		var gate = CreateGate(published, delay.DelayAsync);
 
 		for (var item = 1; item <= 8; item++)
 			await gate.AddAsync(item, CancellationToken.None);
 
-		for (var item = 9; item <= 39; item++)
+		await gate.AddAsync(9, CancellationToken.None);
+		await delay.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+		for (var item = 10; item <= 39; item++)
 			await gate.AddAsync(item, CancellationToken.None);
 
 		Assert.AreEqual(1, published.Count);
@@ -42,6 +46,7 @@ public sealed class Win32EnumerationPublicationGateTests
 
 		Assert.AreEqual(2, published.Count);
 		CollectionAssert.AreEqual(Enumerable.Range(9, 32).ToArray(), published[1]);
+		delay.Release();
 	}
 
 	[TestMethod]
