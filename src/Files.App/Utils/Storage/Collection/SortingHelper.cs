@@ -46,6 +46,9 @@ namespace Files.App.Utils.Storage
 		{
 			private readonly Func<ListedItem, object> orderFunc;
 			private readonly IComparer<object> naturalStringComparer = NaturalStringComparer.GetForProcessor();
+			// Cache key extraction for the lifetime of one sort/publication session. Items must
+			// keep these keys stable while they are stored in the immutable sorted tree.
+			private readonly ConditionalWeakTable<ListedItem, SortKey> sortKeyCache = new();
 			private readonly SortOption directorySortOption;
 			private readonly int directionMultiplier;
 			private readonly bool sortDirectoriesAlongsideFiles;
@@ -79,9 +82,12 @@ namespace Files.App.Utils.Storage
 						return priorityComparison;
 				}
 
+				var xKey = GetSortKey(x);
+				var yKey = GetSortKey(y);
+
 				if (directorySortOption == SortOption.FileTag)
 				{
-					var emptyTagComparison = CompareAscending(string.IsNullOrEmpty(orderFunc(x) as string), string.IsNullOrEmpty(orderFunc(y) as string));
+					var emptyTagComparison = CompareAscending(string.IsNullOrEmpty(xKey.Primary as string), string.IsNullOrEmpty(yKey.Primary as string));
 					if (emptyTagComparison != 0)
 						return emptyTagComparison;
 				}
@@ -89,13 +95,13 @@ namespace Files.App.Utils.Storage
 				var primaryComparer = directorySortOption == SortOption.Name
 					? naturalStringComparer
 					: Comparer<object>.Default;
-				var sortComparison = primaryComparer.Compare(orderFunc(x), orderFunc(y)) * directionMultiplier;
+				var sortComparison = primaryComparer.Compare(xKey.Primary, yKey.Primary) * directionMultiplier;
 				if (sortComparison != 0)
 					return sortComparison;
 
 				if (directorySortOption != SortOption.Name)
 				{
-					var nameComparison = naturalStringComparer.Compare(OrderByNameFunc(x), OrderByNameFunc(y)) * directionMultiplier;
+					var nameComparison = naturalStringComparer.Compare(xKey.Name, yKey.Name) * directionMultiplier;
 					if (nameComparison != 0)
 						return nameComparison;
 				}
@@ -105,11 +111,20 @@ namespace Files.App.Utils.Storage
 				return CompareIdentity(x, y);
 			}
 
+			private SortKey GetSortKey(ListedItem item)
+			=> sortKeyCache.GetValue(item, value =>
+			{
+				var primary = orderFunc(value);
+				return new SortKey(primary, directorySortOption == SortOption.Name ? primary : OrderByNameFunc(value));
+			});
+
 			private bool PrioritizeFilesOrFolders(ListedItem listedItem)
 				=> (listedItem.PrimaryItemAttribute == StorageItemTypes.File || listedItem.IsShortcut || listedItem.IsArchive) ^ sortFilesFirst;
 
 			private static int CompareAscending(bool x, bool y)
 				=> x.CompareTo(y);
+
+			private sealed record SortKey(object Primary, object Name);
 
 			private static int CompareIdentity(ListedItem x, ListedItem y)
 			{

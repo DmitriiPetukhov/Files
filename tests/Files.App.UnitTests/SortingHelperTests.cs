@@ -45,6 +45,20 @@ public sealed class SortingHelperTests
 		CollectionAssert.AreEqual(new[] { "file1", "file2", "file10" }, snapshot!.Select(item => item.Name).ToArray());
 	}
 
+	[TestMethod]
+	public void CachesPrimarySortKeysAcrossComparisons()
+	{
+		var items = Enumerable.Range(0, 16)
+			.Reverse()
+			.Select(index => CountingListedItem.Create($"item{index}"))
+			.ToArray();
+		var comparer = SortingHelper.GetComparer(SortOption.Name, SortDirection.Ascending, true, false);
+
+		_ = items.OrderBy(item => item, comparer).ToArray();
+
+		Assert.IsTrue(items.All(item => item.NameAccessCount == 1));
+	}
+
 	private static ListedItem CreateFolder(string name)
 	{
 		var item = (ListedItem)RuntimeHelpers.GetUninitializedObject(typeof(ListedItem));
@@ -52,5 +66,28 @@ public sealed class SortingHelperTests
 		item.ItemPath = $"C:\\{name}";
 		item.PrimaryItemAttribute = Windows.Storage.StorageItemTypes.Folder;
 		return item;
+	}
+
+	private sealed class CountingListedItem : ListedItem
+	{
+		private string name = string.Empty;
+
+		public int NameAccessCount { get; private set; }
+
+		public static CountingListedItem Create(string name)
+		{
+			var item = (CountingListedItem)RuntimeHelpers.GetUninitializedObject(typeof(CountingListedItem));
+			item.name = name;
+			return item;
+		}
+
+		public override string Name
+		{
+			get
+			{
+				NameAccessCount++;
+				return name;
+			}
+		}
 	}
 }
