@@ -1,6 +1,8 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using System.Collections.Immutable;
+
 namespace Files.App.Utils.Storage;
 
 /// <summary>
@@ -17,9 +19,9 @@ internal interface IFolderPublicationSession<T>
 	/// <param name="snapshot">The new snapshot when the batch is accepted.</param>
 	/// <returns><see langword="true"/> when the batch is accepted.</returns>
 	bool TryAppend(
-		IReadOnlyCollection<T> batch,
+		ImmutableArray<T> batch,
 		CancellationToken cancellationToken,
-		out IReadOnlyCollection<T>? snapshot);
+		out ImmutableArray<T>? snapshot);
 
 	/// <summary>
 	/// Replaces the current state with the authoritative final result.
@@ -29,9 +31,9 @@ internal interface IFolderPublicationSession<T>
 	/// <param name="snapshot">The final ordered snapshot when accepted.</param>
 	/// <returns><see langword="true"/> when the final result is accepted.</returns>
 	bool TryReplaceFinal(
-		IReadOnlyCollection<T> items,
+		ImmutableArray<T> items,
 		CancellationToken cancellationToken,
-		out IReadOnlyCollection<T>? snapshot);
+		out ImmutableArray<T>? snapshot);
 
 	/// <summary>
 	/// Invalidates the session so stale callbacks cannot change its state.

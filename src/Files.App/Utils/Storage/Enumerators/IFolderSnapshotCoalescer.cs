@@ -1,6 +1,8 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using System.Collections.Immutable;
+
 namespace Files.App.Utils.Storage;
 
 /// <summary>
@@ -15,7 +17,7 @@ internal interface IFolderSnapshotCoalescer<T>
 	/// <param name="snapshot">The immutable ordered snapshot.</param>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	void Submit(
-		IReadOnlyCollection<T> snapshot,
+		ImmutableArray<T> snapshot,
 		CancellationToken cancellationToken);
 
 	/// <summary>
@@ -24,7 +26,7 @@ internal interface IFolderSnapshotCoalescer<T>
 	/// <param name="snapshot">The immutable final snapshot.</param>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	void SubmitFinal(
-		IReadOnlyCollection<T> snapshot,
+		ImmutableArray<T> snapshot,
 		CancellationToken cancellationToken);
 
 	/// <summary>

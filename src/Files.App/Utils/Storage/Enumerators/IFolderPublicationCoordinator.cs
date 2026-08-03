@@ -1,6 +1,8 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using System.Collections.Immutable;
+
 namespace Files.App.Utils.Storage;
 
 /// <summary>
@@ -15,7 +17,7 @@ internal interface IFolderPublicationCoordinator<T>
 	/// <param name="source">The provider-neutral enumeration source.</param>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	/// <returns>The authoritative complete result.</returns>
-	Task<IReadOnlyCollection<T>> EnumerateAsync(
+	Task<ImmutableArray<T>> EnumerateAsync(
 		IFolderEnumerationSource<T> source,
 		CancellationToken cancellationToken);
 
@@ -26,7 +28,7 @@ internal interface IFolderPublicationCoordinator<T>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	/// <returns><see langword="true"/> when the batch belongs to the active session.</returns>
 	bool TryPublishBatch(
-		IReadOnlyCollection<T> batch,
+		ImmutableArray<T> batch,
 		CancellationToken cancellationToken);
 
 	/// <summary>
@@ -36,7 +38,7 @@ internal interface IFolderPublicationCoordinator<T>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	/// <returns><see langword="true"/> when the final result belongs to the active session.</returns>
 	bool TryPublishFinal(
-		IReadOnlyCollection<T> items,
+		ImmutableArray<T> items,
 		CancellationToken cancellationToken);
 
 	/// <summary>
