@@ -21,6 +21,7 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 	private CancellationToken pendingCancellationToken;
 	private bool pendingSnapshotIsFinal;
 	private TaskCompletionSource<bool>? scheduledCompletion;
+	private TaskCompletionSource<bool>? activeApplyCompletion;
 	private CancellationTokenSource? cooldownCancellation;
 	private DateTimeOffset? nextIntermediateApplyAt;
 	private bool callbackScheduled;
@@ -96,10 +97,11 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 		}
 	}
 
-	public void Cancel()
+	public async Task CancelAsync()
 	{
 		TaskCompletionSource<bool>? completion;
 		CancellationTokenSource? cooldownToCancel;
+		Task? activeApply;
 
 		lock (syncRoot)
 		{
@@ -109,11 +111,15 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			callbackScheduled = false;
 			completion = scheduledCompletion;
 			scheduledCompletion = null;
+			activeApply = activeApplyCompletion?.Task;
 			cooldownToCancel = cooldownCancellation;
 			cooldownCancellation = null;
 		}
 
 		cooldownToCancel?.Cancel();
+		if (activeApply is not null)
+			await activeApply.ConfigureAwait(false);
+
 		completion?.TrySetResult(true);
 	}
 
@@ -191,6 +197,7 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 		IReadOnlyCollection<T>? snapshot;
 		CancellationToken cancellationToken;
 		bool isFinal;
+		TaskCompletionSource<bool>? activeApplyCompletion = null;
 
 		lock (syncRoot)
 		{
@@ -199,13 +206,16 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 			isFinal = pendingSnapshotIsFinal;
 			pendingSnapshot = null;
 			pendingSnapshotIsFinal = false;
+
+			if (snapshot is not null && !cancellationToken.IsCancellationRequested && !isCanceled)
+				activeApplyCompletion = this.activeApplyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 		}
 
 		var applyFailed = false;
 
 		try
 		{
-			if (snapshot is not null && !cancellationToken.IsCancellationRequested && !isCanceled)
+			if (activeApplyCompletion is not null)
 				await applyAsync(snapshot as IReadOnlyList<T> ?? snapshot.ToArray(), cancellationToken);
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || isCanceled)
@@ -252,9 +262,13 @@ internal sealed class EnumerationSnapshotCoalescer<T>
 						nextCooldownCancellation = cooldownCancellation = new CancellationTokenSource();
 					}
 				}
+
+				if (ReferenceEquals(this.activeApplyCompletion, activeApplyCompletion))
+					this.activeApplyCompletion = null;
 			}
 
 			completion.TrySetResult(!applyFailed);
+			activeApplyCompletion?.TrySetResult(true);
 
 			if (nextCompletion is not null)
 			{

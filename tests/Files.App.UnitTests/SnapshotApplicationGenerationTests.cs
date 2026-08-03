@@ -16,4 +16,15 @@ public sealed class SnapshotApplicationGenerationTests
 		Assert.IsFalse(generation.IsCurrent(first));
 		Assert.IsTrue(generation.IsCurrent(second));
 	}
+
+	[TestMethod]
+	public void InvalidateRejectsQueuedApplication()
+	{
+		var generation = new SnapshotApplicationGeneration();
+		var application = generation.Start();
+
+		generation.Invalidate();
+
+		Assert.IsFalse(generation.IsCurrent(application));
+	}
 }

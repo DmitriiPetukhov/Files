@@ -15,6 +15,12 @@ internal sealed class SnapshotApplicationGeneration
 		return generation;
 	}
 
+	public void Invalidate()
+	{
+		var generation = Interlocked.Increment(ref nextGeneration);
+		Volatile.Write(ref currentGeneration, generation);
+	}
+
 	public bool IsCurrent(long generation)
 		=> Volatile.Read(ref currentGeneration) == generation;
 }

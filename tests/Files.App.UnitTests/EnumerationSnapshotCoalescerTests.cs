@@ -49,7 +49,7 @@ public sealed class EnumerationSnapshotCoalescerTests
 		var coalescer = CreateCoalescer(scheduler, applied);
 
 		coalescer.Submit(new[] { 1 }, CancellationToken.None);
-		coalescer.Cancel();
+		await coalescer.CancelAsync();
 		await scheduler.RunNextAsync();
 
 		Assert.AreEqual(0, applied.Count);
@@ -165,12 +165,36 @@ public sealed class EnumerationSnapshotCoalescerTests
 
 		coalescer.Submit(new[] { 1 }, CancellationToken.None);
 		var drain = coalescer.DrainAsync(CancellationToken.None);
-		coalescer.Cancel();
+		await coalescer.CancelAsync();
 
 		await drain;
 		await scheduler.RunNextAsync();
 
 		Assert.AreEqual(0, applied.Count);
+	}
+
+	[TestMethod]
+	public async Task CancellationWaitsForActiveApply()
+	{
+		var scheduler = new ImmediateScheduler();
+		var applyStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var releaseApply = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var coalescer = new EnumerationSnapshotCoalescer<int>(
+			async (_, _) =>
+			{
+				applyStarted.SetResult(true);
+				await releaseApply.Task;
+			},
+			scheduler);
+
+		coalescer.Submit(new[] { 1 }, CancellationToken.None);
+		await applyStarted.Task;
+
+		var cancellation = coalescer.CancelAsync();
+
+		Assert.IsFalse(cancellation.IsCompleted);
+		releaseApply.SetResult(true);
+		await cancellation;
 	}
 
 	[TestMethod]

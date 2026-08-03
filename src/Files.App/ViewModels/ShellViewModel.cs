@@ -916,8 +916,9 @@ namespace Files.App.ViewModels
 				cts.Cancel();
 				cts.Dispose();
 			}
-			thumbnailRetryDebounce.Clear();
-			filesAndFolders.Clear();
+		thumbnailRetryDebounce.Clear();
+		snapshotApplicationGeneration.Invalidate();
+		filesAndFolders.Clear();
 			FilesAndFolders.Clear();
 			CancelSearch();
 		}
@@ -1067,7 +1068,7 @@ namespace Files.App.ViewModels
 
 		private async Task ApplyFilesAndFoldersSnapshotAsync(IReadOnlyList<ListedItem> snapshot, CancellationToken cancellationToken, bool propagateExceptions = false)
 		{
-			var snapshotGeneration = snapshot.Count == 0 ? 0 : snapshotApplicationGeneration.Start();
+			var snapshotGeneration = snapshotApplicationGeneration.Start();
 
 			// Native publication must observe apply failures so the coalescer can retain and
 			// retry a final snapshot. Other refresh callers preserve the existing safe logging path.
@@ -1079,7 +1080,7 @@ namespace Files.App.ViewModels
 					// otherwise a queued clear can erase the next folder after cancellation.
 					void ClearDisplayIfCurrentOnUi()
 					{
-						if (cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
+						if (!snapshotApplicationGeneration.IsCurrent(snapshotGeneration) || cancellationToken.IsCancellationRequested || addFilesCTS?.IsCancellationRequested == true)
 							return;
 
 						ClearDisplayOnUi();
@@ -2338,7 +2339,7 @@ namespace Files.App.ViewModels
 					finally
 					{
 						publicationSession.Cancel();
-						snapshotCoalescer.Cancel();
+						await snapshotCoalescer.CancelAsync();
 						nativePublicationGeneration.Complete(publicationGeneration);
 					}
 
