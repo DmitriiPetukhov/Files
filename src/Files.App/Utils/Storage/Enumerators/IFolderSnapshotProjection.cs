@@ -1,8 +1,6 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
-using System.Collections.Immutable;
-
 namespace Files.App.Utils.Storage;
 
 /// <summary>
@@ -17,6 +15,6 @@ internal interface IFolderSnapshotProjection<T>
 	/// <param name="snapshot">The ordered snapshot to display.</param>
 	/// <param name="cancellationToken">The token for the current navigation.</param>
 	Task ApplyAsync(
-		ImmutableArray<T> snapshot,
+		IReadOnlyCollection<T> snapshot,
 		CancellationToken cancellationToken);
 }
