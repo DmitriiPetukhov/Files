@@ -97,17 +97,8 @@ namespace Files.App.Utils.Storage
 								var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
 								if (folder is not null)
 								{
-									await AddItemAsync(folder);
-
-									++count;
-									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
-
-									if (areAlternateStreamsVisible)
-									{
-										foreach (var adsItem in EnumAdsForPath(folder.ItemPath, folder))
-											await AddItemAsync(adsItem, countsTowardThreshold: false);
-									}
-
+									// FileSizeBytes participates in sorting, so resolve the cached value before
+									// the folder enters the immutable publication tree.
 									if (CalculateFolderSizes)
 									{
 										if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
@@ -117,6 +108,17 @@ namespace Files.App.Utils.Storage
 										}
 
 										_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
+									}
+
+									await AddItemAsync(folder);
+
+									++count;
+									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
+
+									if (areAlternateStreamsVisible)
+									{
+										foreach (var adsItem in EnumAdsForPath(folder.ItemPath, folder))
+											await AddItemAsync(adsItem, countsTowardThreshold: false);
 									}
 								}
 							}
