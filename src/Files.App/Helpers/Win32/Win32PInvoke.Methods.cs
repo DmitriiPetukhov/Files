@@ -42,6 +42,15 @@ namespace Files.App.Helpers
 			bool bAlertable
 		);
 
+		[DllImport("api-ms-win-core-io-l1-1-0.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool GetOverlappedResult(
+			IntPtr hFile,
+			ref OVERLAPPED lpOverlapped,
+			out uint lpNumberOfBytesTransferred,
+			bool bWait
+		);
+
 		[DllImport("api-ms-win-core-file-l2-1-0.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 		public unsafe static extern bool ReadDirectoryChangesW(
 			IntPtr hDirectory,
