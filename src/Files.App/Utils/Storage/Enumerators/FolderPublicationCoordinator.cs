@@ -12,6 +12,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	private readonly IFolderPublicationSession<T> session;
 	private readonly FolderPublicationSnapshotGate snapshotGate = new();
 	private readonly Func<IReadOnlyCollection<T>, Task> publishSnapshotAsync;
+	private bool isActive = true;
 
 	public FolderPublicationCoordinator(
 		IComparer<T> itemComparer,
@@ -40,6 +41,42 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 		return finalItems;
 	}
 
+	/// <inheritdoc />
+	public Task<bool> TryRebuildIndexAsync(
+		IComparer<T> itemComparer,
+		CancellationToken cancellationToken)
+	{
+		ArgumentNullException.ThrowIfNull(itemComparer);
+
+		return snapshotGate.ExecuteAsync(async () =>
+		{
+			if (!CanPublish(cancellationToken))
+				return false;
+
+			var rebuildResult = await FolderPublicationSessionWorker.RebuildIndexAsync(
+				session,
+				itemComparer,
+				cancellationToken);
+
+			if (!rebuildResult.Accepted)
+				return false;
+
+			await publishSnapshotAsync(rebuildResult.Snapshot!);
+			return true;
+		});
+	}
+
+	/// <inheritdoc />
+	public Task CancelAsync()
+	{
+		return snapshotGate.ExecuteAsync(() =>
+		{
+			isActive = false;
+			session.Cancel();
+			return Task.FromResult(true);
+		});
+	}
+
 	private Task PublishBatchAsync(
 		IReadOnlyCollection<T> batch,
 		CancellationToken cancellationToken)
@@ -48,6 +85,9 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 
 		return snapshotGate.ExecuteAsync(async () =>
 		{
+			if (!CanPublish(cancellationToken))
+				return false;
+
 			var accepted = session.TryAppend(batch, cancellationToken, out var snapshot);
 			if (!accepted)
 				return false;
@@ -65,6 +105,9 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 
 		return snapshotGate.ExecuteAsync(async () =>
 		{
+			if (!CanPublish(cancellationToken))
+				return false;
+
 			var accepted = session.TryReplaceFinal(items, cancellationToken, out var snapshot);
 			if (!accepted)
 				return false;
@@ -74,4 +117,6 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 		});
 	}
 
+	private bool CanPublish(CancellationToken cancellationToken)
+		=> isActive && !cancellationToken.IsCancellationRequested;
 }
