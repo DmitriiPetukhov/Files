@@ -251,6 +251,39 @@ public sealed class FolderPublicationCoordinatorTests
 		Assert.AreEqual(0, snapshots.Count);
 	}
 
+	[TestMethod]
+	public async Task CancelAsync_WaitsForActivePublicationAndRejectsLaterFinalResult()
+	{
+		var publicationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var releasePublication = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var snapshots = new List<IReadOnlyCollection<string>>();
+		var coordinator = new FolderPublicationCoordinator<string>(
+			StringComparer.Ordinal,
+			async snapshot =>
+			{
+				publicationStarted.SetResult(true);
+				await releasePublication.Task;
+				snapshots.Add(snapshot.ToArray());
+			});
+
+		var enumerationTask = coordinator.EnumerateAsync(
+			new FakeFolderEnumerationSource<string>(
+				[(IReadOnlyCollection<string>)["a"]],
+				["a"]),
+			CancellationToken.None);
+
+		await publicationStarted.Task;
+		var cancellationTask = coordinator.CancelAsync();
+
+		Assert.IsFalse(cancellationTask.IsCompleted);
+		releasePublication.SetResult(true);
+
+		await cancellationTask;
+		await enumerationTask;
+
+		Assert.AreEqual(1, snapshots.Count);
+	}
+
 	private sealed class FakeFolderEnumerationSource<T>(
 		IReadOnlyList<IReadOnlyCollection<T>> batches,
 		IReadOnlyCollection<T> finalItems) : IFolderEnumerationSource<T>
