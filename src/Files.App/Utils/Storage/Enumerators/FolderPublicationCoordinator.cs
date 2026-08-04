@@ -59,7 +59,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 				return (Accepted: accepted, Snapshot: snapshot);
 			});
 
-			if (!rebuildResult.Accepted)
+			if (!rebuildResult.Accepted || !CanPublish(cancellationToken))
 				return false;
 
 			await publishSnapshotAsync(rebuildResult.Snapshot!);
@@ -70,11 +70,13 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	/// <inheritdoc />
 	public Task CancelAsync()
 	{
-		Interlocked.Exchange(ref isActive, 0);
-		session.Cancel();
-
 		return operationGate.ExecuteAsync(() =>
-			Task.FromResult(true));
+		{
+			Interlocked.Exchange(ref isActive, 0);
+			session.Cancel();
+
+			return Task.FromResult(true);
+		});
 	}
 
 	private Task PublishBatchAsync(

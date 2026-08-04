@@ -137,6 +137,47 @@ public sealed class FolderPublicationCoordinatorTests
 	}
 
 	[TestMethod]
+	public async Task TryRebuildIndexAsync_RejectsCancellationDuringRebuild()
+	{
+		var snapshots = new List<IReadOnlyCollection<int>>();
+		var coordinator = new FolderPublicationCoordinator<int>(
+			Comparer<int>.Default,
+			snapshot =>
+			{
+				snapshots.Add(snapshot.ToArray());
+				return Task.CompletedTask;
+			});
+
+		await coordinator.EnumerateAsync(
+			new FakeFolderEnumerationSource<int>(
+				[(IReadOnlyCollection<int>)[1, 2, 3]],
+				[1, 2, 3]),
+				CancellationToken.None);
+
+		using var cancellationTokenSource = new CancellationTokenSource();
+		using var comparerEntered = new ManualResetEventSlim();
+		using var releaseComparer = new ManualResetEventSlim();
+		var comparer = new BlockingComparer(comparerEntered, releaseComparer);
+		var snapshotsBeforeRebuild = snapshots.Count;
+
+		try
+		{
+			var rebuildTask = coordinator.TryRebuildIndexAsync(comparer, cancellationTokenSource.Token);
+
+			Assert.IsTrue(comparerEntered.Wait(TimeSpan.FromSeconds(5)));
+			cancellationTokenSource.Cancel();
+			releaseComparer.Set();
+
+			Assert.IsFalse(await rebuildTask);
+			Assert.AreEqual(snapshotsBeforeRebuild, snapshots.Count);
+		}
+		finally
+		{
+			releaseComparer.Set();
+		}
+	}
+
+	[TestMethod]
 	public async Task CancelAsync_IsIdempotentAndRejectsLateSourceCallbacks()
 	{
 		var snapshots = new List<IReadOnlyCollection<string>>();
