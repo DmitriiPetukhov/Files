@@ -200,6 +200,9 @@ internal sealed class Win32FolderChangeSource
 				native.CancelIoEx(watchHandle);
 		}
 		IntPtr bufferPointer = IntPtr.Zero;
+		SafeFileHandle? eventHandle = null;
+		var overlapped = new OVERLAPPED();
+		var readPending = false;
 
 		try
 		{
@@ -213,9 +216,8 @@ internal sealed class Win32FolderChangeSource
 
 			var buffer = new byte[BufferSize];
 			bufferPointer = Marshal.AllocHGlobal(BufferSize);
-			var overlapped = new OVERLAPPED();
-			using var eventHandle = native.CreateEvent();
-			overlapped.hEvent = eventHandle.DangerousGetHandle();
+			eventHandle = native.CreateEvent();
+			overlapped.hEvent = eventHandle!.DangerousGetHandle();
 
 			using var cancellationRegistration = cancellationToken.Register(CancelPendingIo);
 			if (cancellationToken.IsCancellationRequested)
@@ -244,6 +246,7 @@ internal sealed class Win32FolderChangeSource
 				{
 					throw new Win32Exception(readErrorCode);
 				}
+				readPending = true;
 
 				var waitResult = native.WaitForSingleObjectEx(overlapped.hEvent, Infinite, true, out var waitErrorCode);
 				if (waitResult == Infinite)
@@ -261,6 +264,7 @@ internal sealed class Win32FolderChangeSource
 				{
 					throw new Win32Exception(resultErrorCode);
 				}
+				readPending = false;
 
 				if (bytesTransferred == 0)
 					continue;
@@ -298,6 +302,9 @@ internal sealed class Win32FolderChangeSource
 		finally
 		{
 			CancelPendingIo();
+			if (readPending)
+				native.GetOverlappedResult(watchHandle, ref overlapped, out _, true, out _);
+			eventHandle?.Dispose();
 			native.CloseHandle(watchHandle);
 			if (bufferPointer != IntPtr.Zero)
 				Marshal.FreeHGlobal(bufferPointer);

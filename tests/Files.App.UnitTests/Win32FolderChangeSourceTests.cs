@@ -251,6 +251,26 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_CancelsBeforeDisposingEventOnWaitFailure()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { WaitErrorCode = 6 };
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+
+		try
+		{
+			await source.WatchAsync(_ => { }, cancellationSource.Token);
+			Assert.Fail("Expected the watcher task to propagate the wait failure.");
+		}
+		catch (Win32Exception exception)
+		{
+			Assert.AreEqual(6, exception.NativeErrorCode);
+		}
+
+		Assert.IsFalse(native.EventDisposedBeforeCancel);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();
@@ -392,20 +412,26 @@ public sealed class Win32FolderChangeSourceTests
 		public IntPtr WatchHandle { get; init; } = new(1);
 		public int? ReadErrorCode { get; init; }
 		public bool WaitForCancellation { get; init; }
+		public int? WaitErrorCode { get; init; }
 		public ManualResetEventSlim ReadSubmitted { get; } = new();
 		public int ReadCallCount { get; private set; }
 		public int CancelCallCount { get; private set; }
 		public int CloseHandleCallCount { get; private set; }
 		public int NotifyFilters { get; private set; }
+		public bool EventDisposedBeforeCancel { get; private set; }
 		public IntPtr SubmittedBuffer { get; private set; }
 		public IntPtr CompletedBuffer { get; private set; }
+		private SafeFileHandle? eventHandle;
 		private ManualResetEventSlim CancellationRequested { get; } = new();
 
 		public IntPtr CreateWatchHandle(string path)
 			=> WatchHandle;
 
 		public SafeFileHandle CreateEvent()
-			=> new(new IntPtr(2), ownsHandle: false);
+		{
+			eventHandle = new SafeFileHandle(new IntPtr(2), ownsHandle: false);
+			return eventHandle;
+		}
 
 		public bool ReadDirectoryChanges(
 			IntPtr watchHandle,
@@ -432,6 +458,12 @@ public sealed class Win32FolderChangeSourceTests
 
 		public uint WaitForSingleObjectEx(IntPtr eventHandle, uint timeout, bool alertable, out int errorCode)
 		{
+			if (WaitErrorCode is int waitErrorCode)
+			{
+				errorCode = waitErrorCode;
+				return 0xFFFFFFFF;
+			}
+
 			if (WaitForCancellation)
 				CancellationRequested.Wait(TimeSpan.FromSeconds(5));
 
@@ -454,6 +486,7 @@ public sealed class Win32FolderChangeSourceTests
 
 		public void CancelIoEx(IntPtr watchHandle)
 		{
+			EventDisposedBeforeCancel = eventHandle?.IsClosed == true;
 			CancelCallCount++;
 			CancellationRequested.Set();
 		}
