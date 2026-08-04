@@ -1,7 +1,10 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -45,6 +48,39 @@ public sealed class Win32FolderChangeSourceTests
 		BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(8, 4), uint.MaxValue);
 
 		AssertFormatException(() => Win32FolderChangeParser.Parse(buffer, @"C:\Folder"));
+	}
+
+	[TestMethod]
+	public async Task WatchAsync_PropagatesCallbackFailure()
+	{
+		var folderPath = Path.Combine(Path.GetTempPath(), $"Files-{Guid.NewGuid():N}");
+		Directory.CreateDirectory(folderPath);
+
+		try
+		{
+			using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+			var source = new Win32FolderChangeSource(folderPath, includeAttributes: false);
+			var watchTask = source.WatchAsync(
+				_ => throw new InvalidOperationException("Sentinel callback failure."),
+				cancellationSource.Token);
+
+			await Task.Delay(100);
+			File.WriteAllText(Path.Combine(folderPath, "trigger.txt"), "trigger");
+
+			try
+			{
+				await watchTask;
+				Assert.Fail("Expected the watcher task to propagate the callback failure.");
+			}
+			catch (InvalidOperationException)
+			{
+			}
+		}
+		finally
+		{
+			if (Directory.Exists(folderPath))
+				Directory.Delete(folderPath, recursive: true);
+		}
 	}
 
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)

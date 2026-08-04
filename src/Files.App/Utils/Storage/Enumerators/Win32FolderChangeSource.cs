@@ -137,6 +137,7 @@ internal sealed class Win32FolderChangeSource
 				ex,
 				"Win32 folder change source failed for {PathIdentifier}.",
 				LogPathHelper.GetPathIdentifier(path));
+			throw;
 		}
 		finally
 		{
