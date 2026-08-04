@@ -66,6 +66,56 @@ public sealed class FolderPublicationCoordinatorTests
 	}
 
 	[TestMethod]
+	public async Task EnumerateAsync_SerializesConcurrentSourceCallbacks()
+	{
+		var firstPublicationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var releaseFirstPublication = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var snapshots = new List<IReadOnlyCollection<string>>();
+		var publicationCount = 0;
+		var activePublications = 0;
+		var coordinator = new FolderPublicationCoordinator<string>(
+			StringComparer.Ordinal,
+			async snapshot =>
+			{
+				Assert.AreEqual(1, Interlocked.Increment(ref activePublications));
+				try
+				{
+					if (Interlocked.Increment(ref publicationCount) == 1)
+					{
+						firstPublicationStarted.SetResult(true);
+						await releaseFirstPublication.Task;
+					}
+
+					snapshots.Add(snapshot.ToArray());
+				}
+				finally
+				{
+					Interlocked.Decrement(ref activePublications);
+				}
+			});
+
+		var enumerationTask = coordinator.EnumerateAsync(
+			new ConcurrentFakeFolderEnumerationSource<string>(
+				[
+					(IReadOnlyCollection<string>)["b", "a"],
+					(IReadOnlyCollection<string>)["d", "c"]
+				],
+				["d", "c", "b", "a"]),
+			CancellationToken.None);
+
+		await firstPublicationStarted.Task;
+		Assert.IsFalse(enumerationTask.IsCompleted);
+
+		releaseFirstPublication.SetResult(true);
+		await enumerationTask;
+
+		Assert.AreEqual(3, snapshots.Count);
+		Assert.IsTrue(snapshots.Take(2).Any(snapshot => snapshot.SequenceEqual(new[] { "a", "b" })));
+		Assert.IsTrue(snapshots.Take(2).Any(snapshot => snapshot.SequenceEqual(new[] { "a", "b", "c", "d" })));
+		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, snapshots[2].ToArray());
+	}
+
+	[TestMethod]
 	public async Task TryRebuildIndexAsync_SerializesWithEnumerationPublication()
 	{
 		var firstPublicationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -212,6 +262,23 @@ public sealed class FolderPublicationCoordinatorTests
 			foreach (var batch in batches)
 				await publishBatchAsync(batch);
 
+			return finalItems;
+		}
+	}
+
+	private sealed class ConcurrentFakeFolderEnumerationSource<T>(
+		IReadOnlyList<IReadOnlyCollection<T>> batches,
+		IReadOnlyCollection<T> finalItems) : IFolderEnumerationSource<T>
+	{
+		public async Task<IReadOnlyCollection<T>> EnumerateAsync(
+			Func<IReadOnlyCollection<T>, Task> publishBatchAsync,
+			CancellationToken cancellationToken)
+		{
+			var publicationTasks = batches
+				.Select(publishBatchAsync)
+				.ToArray();
+
+			await Task.WhenAll(publicationTasks);
 			return finalItems;
 		}
 	}
