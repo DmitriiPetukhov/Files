@@ -4,7 +4,7 @@
 namespace Files.App.Utils.Storage;
 
 /// <summary>
-/// Coordinates source enumeration, canonical state, snapshot publication, and final settlement.
+/// Coordinates source enumeration, canonical state, and snapshot publication for one navigation.
 /// </summary>
 /// <typeparam name="T">The item type shown by the folder projection.</typeparam>
 internal interface IFolderPublicationCoordinator<T>
@@ -19,37 +19,4 @@ internal interface IFolderPublicationCoordinator<T>
 		IFolderEnumerationSource<T> source,
 		CancellationToken cancellationToken);
 
-	/// <summary>
-	/// Merges a completed intermediate batch into the canonical session.
-	/// </summary>
-	/// <param name="batch">The completed non-empty batch.</param>
-	/// <param name="cancellationToken">The token for the current navigation.</param>
-	/// <returns><see langword="true"/> when the batch belongs to the active session.</returns>
-	bool TryPublishBatch(
-		IReadOnlyCollection<T> batch,
-		CancellationToken cancellationToken);
-
-	/// <summary>
-	/// Replaces the canonical session with the authoritative final result.
-	/// </summary>
-	/// <param name="items">The complete accepted result.</param>
-	/// <param name="cancellationToken">The token for the current navigation.</param>
-	/// <returns><see langword="true"/> when the final result belongs to the active session.</returns>
-	bool TryPublishFinal(
-		IReadOnlyCollection<T> items,
-		CancellationToken cancellationToken);
-
-	/// <summary>
-	/// Waits for pending snapshot application and optionally retries the final snapshot once.
-	/// </summary>
-	/// <param name="cancellationToken">The token for the current navigation.</param>
-	/// <param name="retryPendingSnapshot">Whether the final pending snapshot may be retried.</param>
-	Task DrainAsync(
-		CancellationToken cancellationToken,
-		bool retryPendingSnapshot = false);
-
-	/// <summary>
-	/// Cancels the session and waits for owned publication work to stop.
-	/// </summary>
-	Task CancelAsync();
 }
