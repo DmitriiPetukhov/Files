@@ -38,6 +38,7 @@ namespace Files.App.ViewModels
 		private readonly SemaphoreSlim loadThumbnailSemaphore;
 		private readonly ConcurrentDictionary<string, CancellationTokenSource> thumbnailRetryDebounce;
 		private readonly ConcurrentQueue<(uint Action, string FileName)> operationQueue;
+		private readonly FolderChangeQueueGate operationQueueGate;
 		private readonly ConcurrentQueue<uint> gitChangesQueue;
 		private readonly ConcurrentDictionary<string, bool> itemLoadQueue;
 		private readonly AsyncManualResetEvent operationEvent;
@@ -726,6 +727,7 @@ namespace Files.App.ViewModels
 			filesAndFolders = [];
 			FilesAndFolders = [];
 			operationQueue = new ConcurrentQueue<(uint Action, string FileName)>();
+			operationQueueGate = new FolderChangeQueueGate();
 			gitChangesQueue = new ConcurrentQueue<uint>();
 			itemLoadQueue = new ConcurrentDictionary<string, bool>();
 			thumbnailRetryDebounce = new ConcurrentDictionary<string, CancellationTokenSource>();
@@ -2039,9 +2041,12 @@ namespace Files.App.ViewModels
 
 			aProcessQueueAction = null;
 			gitProcessQueueAction = null;
-			watcherCTS?.Cancel();
-			operationQueue.Clear();
-			watcherCTS = new CancellationTokenSource();
+			operationQueueGate.Close(watcherCTS, () =>
+			{
+				operationQueue.Clear();
+				operationEvent.Reset();
+				watcherCTS = new CancellationTokenSource();
+			});
 		}
 
 		private async Task<int> EnumerateItemsFromStandardFolderAsync(string path, CancellationToken cancellationToken, LibraryItem? library = null)
@@ -2559,30 +2564,35 @@ namespace Files.App.ViewModels
 		{
 			var hasSyncStatus = syncStatus != CloudDriveSyncStatus.NotSynced && syncStatus != CloudDriveSyncStatus.Unknown;
 			var watcherToken = watcherCTS.Token;
+			var watcherGeneration = operationQueueGate.CaptureGeneration();
 
 			aProcessQueueAction ??= Task.Factory.StartNew(() => ProcessOperationQueueAsync(watcherToken, hasSyncStatus), default,
 				TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
 			var source = new Win32FolderChangeSource(path, hasSyncStatus);
-			_ = ObserveDirectoryChangeSourceAsync(source, watcherToken);
+			_ = ObserveDirectoryChangeSourceAsync(source, watcherToken, watcherGeneration);
 		}
 
 		private async Task ObserveDirectoryChangeSourceAsync(
 			Win32FolderChangeSource source,
-			CancellationToken cancellationToken)
+			CancellationToken cancellationToken,
+			int watcherGeneration)
 		{
 			try
 			{
 				await source.WatchAsync(notifications =>
 				{
-					foreach (var notification in notifications)
+					operationQueueGate.TryRun(watcherGeneration, cancellationToken, () =>
 					{
-						if (notification.Action != Win32FolderChangeAction.Unknown)
-							operationQueue.Enqueue(((uint)notification.Action, notification.FullPath));
-					}
+						foreach (var notification in notifications)
+						{
+							if (notification.Action != Win32FolderChangeAction.Unknown)
+								operationQueue.Enqueue(((uint)notification.Action, notification.FullPath));
+						}
 
-					if (notifications.Count > 0)
-						operationEvent.Set();
+						if (notifications.Count > 0)
+							operationEvent.Set();
+					});
 				}, cancellationToken);
 			}
 			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

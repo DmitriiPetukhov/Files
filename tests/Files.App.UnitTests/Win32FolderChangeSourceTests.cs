@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -148,6 +149,33 @@ public sealed class Win32FolderChangeSourceTests
 
 		Assert.AreEqual(1, native.CancelCallCount);
 		Assert.AreEqual(1, native.CloseHandleCallCount);
+	}
+
+	[TestMethod]
+	public async Task FolderChangeQueueGate_ClosesAfterInFlightPublish()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var gate = new FolderChangeQueueGate();
+		var generation = gate.CaptureGeneration();
+		var queue = new ConcurrentQueue<int>();
+		var publishStarted = new ManualResetEventSlim();
+		var releasePublish = new ManualResetEventSlim();
+
+		var publishTask = Task.Run(() => gate.TryRun(generation, cancellationSource.Token, () =>
+		{
+			publishStarted.Set();
+			releasePublish.Wait();
+			queue.Enqueue(1);
+		}));
+
+		Assert.IsTrue(publishStarted.Wait(TimeSpan.FromSeconds(5)));
+		var closeTask = Task.Run(() => gate.Close(cancellationSource, queue.Clear));
+		releasePublish.Set();
+
+		await Task.WhenAll(publishTask, closeTask);
+
+		Assert.IsTrue(queue.IsEmpty);
+		Assert.IsFalse(gate.TryRun(generation, cancellationSource.Token, () => queue.Enqueue(2)));
 	}
 
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)
