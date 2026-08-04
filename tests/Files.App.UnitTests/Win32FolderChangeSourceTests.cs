@@ -362,6 +362,71 @@ public sealed class Win32FolderChangeSourceTests
 		Assert.AreEqual(1, signalCount);
 	}
 
+	[TestMethod]
+	public async Task WatchAsync_RealFolderChangesReachOperationQueue()
+	{
+		var folderPath = Path.Combine(Path.GetTempPath(), $"Files-{Guid.NewGuid():N}");
+		Directory.CreateDirectory(folderPath);
+		using var cancellationSource = new CancellationTokenSource();
+		Task? watchTask = null;
+
+		try
+		{
+			var gate = new FolderChangeQueueGate();
+			var generation = gate.CaptureGeneration();
+			var queue = new ConcurrentQueue<(uint Action, string FileName)>();
+			var adapter = new Win32FolderChangeQueueAdapter(queue, gate, () => { });
+			var started = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+			var source = new Win32FolderChangeSource(folderPath, includeAttributes: false);
+			watchTask = source.WatchAsync(
+				notifications => adapter.Publish(generation, cancellationSource.Token, notifications),
+				cancellationSource.Token,
+				() => started.SetResult(null));
+
+			await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+			var originalPath = Path.Combine(folderPath, "original.txt");
+			var renamedPath = Path.Combine(folderPath, "renamed.txt");
+			File.WriteAllText(originalPath, "one");
+			await WaitForOperationAsync(queue, Win32FolderChangeAction.Added, originalPath);
+
+			File.AppendAllText(originalPath, "two");
+			File.SetLastWriteTimeUtc(originalPath, DateTime.UtcNow.AddSeconds(1));
+			await WaitForOperationAsync(queue, Win32FolderChangeAction.Modified, originalPath);
+
+			File.Move(originalPath, renamedPath);
+			await WaitForOperationAsync(queue, Win32FolderChangeAction.RenamedOldName, originalPath);
+			await WaitForOperationAsync(queue, Win32FolderChangeAction.RenamedNewName, renamedPath);
+
+			File.Delete(renamedPath);
+			await WaitForOperationAsync(queue, Win32FolderChangeAction.Removed, renamedPath);
+
+			gate.Close(cancellationSource, queue.Clear);
+			Assert.IsFalse(adapter.Publish(
+				generation,
+				cancellationSource.Token,
+				[new Win32FolderChangeNotification(Win32FolderChangeAction.Added, originalPath)]));
+			await watchTask;
+		}
+		finally
+		{
+			cancellationSource.Cancel();
+			if (watchTask is not null)
+			{
+				try
+				{
+					await watchTask;
+				}
+				catch
+				{
+				}
+			}
+
+			if (Directory.Exists(folderPath))
+				Directory.Delete(folderPath, recursive: true);
+		}
+	}
+
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)
 	{
 		var encodedNames = new List<byte[]>();
@@ -404,6 +469,23 @@ public sealed class Win32FolderChangeSourceTests
 		catch (FormatException)
 		{
 		}
+	}
+
+	private static async Task WaitForOperationAsync(
+		ConcurrentQueue<(uint Action, string FileName)> queue,
+		Win32FolderChangeAction action,
+		string path)
+	{
+		var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+		while (DateTime.UtcNow < timeout)
+		{
+			if (queue.Any(operation => operation.Action == (uint)action && operation.FileName.Equals(path, StringComparison.OrdinalIgnoreCase)))
+				return;
+
+			await Task.Delay(25);
+		}
+
+		Assert.Fail($"Expected {action} notification for {path}.");
 	}
 
 	private sealed class FakeNative : IWin32FolderChangeNative
