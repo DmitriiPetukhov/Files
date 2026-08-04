@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -110,6 +111,45 @@ public sealed class Win32FolderChangeSourceTests
 		Assert.AreEqual(1, native.ReadCallCount);
 	}
 
+	[TestMethod]
+	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { WaitForCancellation = true };
+		var callbackCalled = false;
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+		var watchTask = source.WatchAsync(_ => callbackCalled = true, cancellationSource.Token);
+
+		Assert.IsTrue(native.ReadSubmitted.Wait(TimeSpan.FromSeconds(5)));
+		cancellationSource.Cancel();
+		await watchTask;
+
+		Assert.IsFalse(callbackCalled);
+		Assert.AreEqual(1, native.CancelCallCount);
+		Assert.AreEqual(1, native.CloseHandleCallCount);
+	}
+
+	[TestMethod]
+	public async Task WatchAsync_NativeFailureCleansUpAndFaults()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { ReadErrorCode = 5 };
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+
+		try
+		{
+			await source.WatchAsync(_ => { }, cancellationSource.Token);
+			Assert.Fail("Expected the watcher task to propagate the native failure.");
+		}
+		catch (Win32Exception exception)
+		{
+			Assert.AreEqual(5, exception.NativeErrorCode);
+		}
+
+		Assert.AreEqual(1, native.CancelCallCount);
+		Assert.AreEqual(1, native.CloseHandleCallCount);
+	}
+
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)
 	{
 		var encodedNames = new List<byte[]>();
@@ -157,7 +197,13 @@ public sealed class Win32FolderChangeSourceTests
 	private sealed class FakeNative : IWin32FolderChangeNative
 	{
 		public byte[] CompletionBuffer { get; init; } = [];
+		public int? ReadErrorCode { get; init; }
+		public bool WaitForCancellation { get; init; }
+		public ManualResetEventSlim ReadSubmitted { get; } = new();
 		public int ReadCallCount { get; private set; }
+		public int CancelCallCount { get; private set; }
+		public int CloseHandleCallCount { get; private set; }
+		private ManualResetEventSlim CancellationRequested { get; } = new();
 
 		public IntPtr CreateWatchHandle(string path)
 			=> new(1);
@@ -173,6 +219,13 @@ public sealed class Win32FolderChangeSourceTests
 			out int errorCode)
 		{
 			ReadCallCount++;
+			ReadSubmitted.Set();
+			if (ReadErrorCode is int readErrorCode)
+			{
+				errorCode = readErrorCode;
+				return false;
+			}
+
 			CompletionBuffer.CopyTo(buffer, 0);
 			errorCode = 997;
 			return false;
@@ -180,6 +233,9 @@ public sealed class Win32FolderChangeSourceTests
 
 		public uint WaitForSingleObjectEx(IntPtr eventHandle, uint timeout, bool alertable, out int errorCode)
 		{
+			if (WaitForCancellation)
+				CancellationRequested.Wait(TimeSpan.FromSeconds(5));
+
 			errorCode = 0;
 			return 0;
 		}
@@ -198,10 +254,13 @@ public sealed class Win32FolderChangeSourceTests
 
 		public void CancelIoEx(IntPtr watchHandle)
 		{
+			CancelCallCount++;
+			CancellationRequested.Set();
 		}
 
 		public void CloseHandle(IntPtr watchHandle)
 		{
+			CloseHandleCallCount++;
 		}
 	}
 }
