@@ -12,7 +12,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	private readonly IFolderPublicationSession<T> session;
 	private readonly FolderPublicationSnapshotGate snapshotGate = new();
 	private readonly Func<IReadOnlyCollection<T>, Task> publishSnapshotAsync;
-	private bool isActive = true;
+	private int isActive = 1;
 
 	public FolderPublicationCoordinator(
 		IComparer<T> itemComparer,
@@ -69,12 +69,11 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	/// <inheritdoc />
 	public Task CancelAsync()
 	{
+		Interlocked.Exchange(ref isActive, 0);
+		session.Cancel();
+
 		return snapshotGate.ExecuteAsync(() =>
-		{
-			isActive = false;
-			session.Cancel();
-			return Task.FromResult(true);
-		});
+			Task.FromResult(true));
 	}
 
 	private Task PublishBatchAsync(
@@ -118,5 +117,5 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	}
 
 	private bool CanPublish(CancellationToken cancellationToken)
-		=> isActive && !cancellationToken.IsCancellationRequested;
+		=> Volatile.Read(ref isActive) != 0 && !cancellationToken.IsCancellationRequested;
 }
