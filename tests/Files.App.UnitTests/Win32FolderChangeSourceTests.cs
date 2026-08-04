@@ -2,11 +2,15 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.Win32.SafeHandles;
+using Windows.Win32;
+using OVERLAPPED = Files.App.Helpers.Win32PInvoke.OVERLAPPED;
 
 namespace Files.App.UnitTests;
 
@@ -83,6 +87,29 @@ public sealed class Win32FolderChangeSourceTests
 		}
 	}
 
+	[TestMethod]
+	public async Task WatchAsync_ContinuesAfterPendingRead()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative
+		{
+			CompletionBuffer = CreateBuffer((Win32FolderChangeAction.Added, "one.txt"))
+		};
+		IReadOnlyCollection<Win32FolderChangeNotification>? receivedNotifications = null;
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+
+		await source.WatchAsync(notifications =>
+		{
+			receivedNotifications = notifications;
+			cancellationSource.Cancel();
+		}, cancellationSource.Token);
+
+		Assert.IsNotNull(receivedNotifications);
+		Assert.AreEqual(1, receivedNotifications.Count);
+		Assert.AreEqual(@"C:\Folder\one.txt", receivedNotifications.First().FullPath);
+		Assert.AreEqual(1, native.ReadCallCount);
+	}
+
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)
 	{
 		var encodedNames = new List<byte[]>();
@@ -123,6 +150,57 @@ public sealed class Win32FolderChangeSourceTests
 			Assert.Fail("Expected a FormatException.");
 		}
 		catch (FormatException)
+		{
+		}
+	}
+
+	private sealed class FakeNative : IWin32FolderChangeNative
+	{
+		public byte[] CompletionBuffer { get; init; } = [];
+		public int ReadCallCount { get; private set; }
+
+		public IntPtr CreateWatchHandle(string path)
+			=> new(1);
+
+		public SafeFileHandle CreateEvent()
+			=> new(new IntPtr(2), ownsHandle: false);
+
+		public bool ReadDirectoryChanges(
+			IntPtr watchHandle,
+			byte[] buffer,
+			int notifyFilters,
+			ref OVERLAPPED overlapped,
+			out int errorCode)
+		{
+			ReadCallCount++;
+			CompletionBuffer.CopyTo(buffer, 0);
+			errorCode = 997;
+			return false;
+		}
+
+		public uint WaitForSingleObjectEx(IntPtr eventHandle, uint timeout, bool alertable, out int errorCode)
+		{
+			errorCode = 0;
+			return 0;
+		}
+
+		public bool GetOverlappedResult(
+			IntPtr watchHandle,
+			ref OVERLAPPED overlapped,
+			out uint bytesTransferred,
+			bool wait,
+			out int errorCode)
+		{
+			bytesTransferred = (uint)CompletionBuffer.Length;
+			errorCode = 0;
+			return true;
+		}
+
+		public void CancelIoEx(IntPtr watchHandle)
+		{
+		}
+
+		public void CloseHandle(IntPtr watchHandle)
 		{
 		}
 	}
