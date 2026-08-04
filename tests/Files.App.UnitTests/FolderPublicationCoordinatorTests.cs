@@ -104,6 +104,39 @@ public sealed class FolderPublicationCoordinatorTests
 	}
 
 	[TestMethod]
+	public async Task TryRebuildIndexAsync_RunsWithoutBlockingCaller()
+	{
+		var coordinator = new FolderPublicationCoordinator<int>(
+			Comparer<int>.Default,
+			_ => Task.CompletedTask);
+
+		await coordinator.EnumerateAsync(
+			new FakeFolderEnumerationSource<int>(
+				[(IReadOnlyCollection<int>)[1, 2, 3]],
+				[1, 2, 3]),
+				CancellationToken.None);
+
+		using var comparerEntered = new ManualResetEventSlim();
+		using var releaseComparer = new ManualResetEventSlim();
+		var comparer = new BlockingComparer(comparerEntered, releaseComparer);
+
+		try
+		{
+			var rebuildTask = coordinator.TryRebuildIndexAsync(comparer, CancellationToken.None);
+
+			Assert.IsTrue(comparerEntered.Wait(TimeSpan.FromSeconds(5)));
+			Assert.IsFalse(rebuildTask.IsCompleted);
+
+			releaseComparer.Set();
+			Assert.IsTrue(await rebuildTask);
+		}
+		finally
+		{
+			releaseComparer.Set();
+		}
+	}
+
+	[TestMethod]
 	public async Task CancelAsync_IsIdempotentAndRejectsLateSourceCallbacks()
 	{
 		var snapshots = new List<IReadOnlyCollection<string>>();
@@ -139,6 +172,16 @@ public sealed class FolderPublicationCoordinatorTests
 				await publishBatchAsync(batch);
 
 			return finalItems;
+		}
+	}
+
+	private sealed class BlockingComparer(ManualResetEventSlim entered, ManualResetEventSlim release) : Comparer<int>
+	{
+		public override int Compare(int x, int y)
+		{
+			entered.Set();
+			release.Wait();
+			return y.CompareTo(x);
 		}
 	}
 }

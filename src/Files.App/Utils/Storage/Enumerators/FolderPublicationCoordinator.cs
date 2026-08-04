@@ -53,10 +53,11 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 			if (!CanPublish(cancellationToken))
 				return false;
 
-			var rebuildResult = await FolderPublicationSessionWorker.RebuildIndexAsync(
-				session,
-				itemComparer,
-				cancellationToken);
+			var rebuildResult = await Task.Run(() =>
+			{
+				var accepted = session.TryRebuildIndex(itemComparer, cancellationToken, out var snapshot);
+				return (Accepted: accepted, Snapshot: snapshot);
+			});
 
 			if (!rebuildResult.Accepted)
 				return false;
