@@ -2717,11 +2717,11 @@ namespace Files.App.ViewModels
 
 		private async Task ProcessOperationQueueAsync(CancellationToken cancellationToken, bool hasSyncStatus)
 		{
-			const uint FILE_ACTION_ADDED = 0x00000001;
-			const uint FILE_ACTION_REMOVED = 0x00000002;
-			const uint FILE_ACTION_MODIFIED = 0x00000003;
-			const uint FILE_ACTION_RENAMED_OLD_NAME = 0x00000004;
-			const uint FILE_ACTION_RENAMED_NEW_NAME = 0x00000005;
+			const uint FILE_ACTION_ADDED = (uint)Win32FolderChangeAction.Added;
+			const uint FILE_ACTION_REMOVED = (uint)Win32FolderChangeAction.Removed;
+			const uint FILE_ACTION_MODIFIED = (uint)Win32FolderChangeAction.Modified;
+			const uint FILE_ACTION_RENAMED_OLD_NAME = (uint)Win32FolderChangeAction.RenamedOldName;
+			const uint FILE_ACTION_RENAMED_NEW_NAME = (uint)Win32FolderChangeAction.RenamedNewName;
 
 			const int UPDATE_BATCH_SIZE = 32;
 			var sampler = new IntervalSampler(200);

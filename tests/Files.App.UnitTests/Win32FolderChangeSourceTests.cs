@@ -386,6 +386,16 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public void FolderChangeActions_UseOperationQueueCodes()
+	{
+		Assert.AreEqual(1u, (uint)Win32FolderChangeAction.Added);
+		Assert.AreEqual(2u, (uint)Win32FolderChangeAction.Removed);
+		Assert.AreEqual(3u, (uint)Win32FolderChangeAction.Modified);
+		Assert.AreEqual(4u, (uint)Win32FolderChangeAction.RenamedOldName);
+		Assert.AreEqual(5u, (uint)Win32FolderChangeAction.RenamedNewName);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_RealFolderChangesReachOperationQueue()
 	{
 		var folderPath = Path.Combine(Path.GetTempPath(), $"Files-{Guid.NewGuid():N}");
