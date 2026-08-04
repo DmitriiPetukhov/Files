@@ -199,6 +199,58 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_ReportsStructuredCancellationDiagnostics()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative
+		{
+			CompletionBuffer = CreateBuffer((Win32FolderChangeAction.Added, "one.txt"))
+		};
+		var diagnostics = new List<Win32FolderChangeDiagnostic>();
+		var source = new Win32FolderChangeSource(
+			@"C:\Users\dmitry\Sensitive",
+			includeAttributes: false,
+			native,
+			diagnostics.Add);
+
+		await source.WatchAsync(_ => cancellationSource.Cancel(), cancellationSource.Token);
+
+		Assert.AreEqual(2, diagnostics.Count);
+		Assert.AreEqual(Win32FolderChangeLifecycle.Started, diagnostics[0].Lifecycle);
+		Assert.AreEqual(Win32FolderChangeLifecycle.Canceled, diagnostics[1].Lifecycle);
+		Assert.IsTrue(diagnostics[0].WatchStarted);
+		Assert.AreNotEqual(@"C:\Users\dmitry\Sensitive", diagnostics[0].PathIdentifier);
+		Assert.AreEqual(1, diagnostics[1].ParsedNotificationCount);
+	}
+
+	[TestMethod]
+	public async Task WatchAsync_ReportsFailureDiagnosticsOnce()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { ReadErrorCode = 5 };
+		var diagnostics = new List<Win32FolderChangeDiagnostic>();
+		var source = new Win32FolderChangeSource(
+			@"C:\Folder",
+			includeAttributes: false,
+			native,
+			diagnostics.Add);
+
+		try
+		{
+			await source.WatchAsync(_ => { }, cancellationSource.Token);
+			Assert.Fail("Expected the watcher task to propagate the native failure.");
+		}
+		catch (Win32Exception)
+		{
+		}
+
+		Assert.AreEqual(2, diagnostics.Count);
+		Assert.AreEqual(Win32FolderChangeLifecycle.Started, diagnostics[0].Lifecycle);
+		Assert.AreEqual(Win32FolderChangeLifecycle.Failed, diagnostics[1].Lifecycle);
+		Assert.IsNotNull(diagnostics[1].Exception);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();

@@ -2594,9 +2594,9 @@ namespace Files.App.ViewModels
 			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 			{
 			}
-			catch (Exception ex)
+			catch (Exception)
 			{
-				App.Logger.LogWarning(ex, "Directory change source task failed.");
+				// Win32FolderChangeSource records the structured failure before rethrowing.
 			}
 		}
 

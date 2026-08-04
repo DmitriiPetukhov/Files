@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
@@ -98,6 +99,23 @@ internal sealed class Win32FolderChangeNative : IWin32FolderChangeNative
 		=> Files.App.Helpers.Win32PInvoke.CloseHandle(watchHandle);
 }
 
+internal enum Win32FolderChangeLifecycle
+{
+	Started,
+	Canceled,
+	Completed,
+	Failed,
+}
+
+internal readonly record struct Win32FolderChangeDiagnostic(
+	Win32FolderChangeLifecycle Lifecycle,
+	Guid WatcherId,
+	string PathIdentifier,
+	TimeSpan Elapsed,
+	bool WatchStarted,
+	int ParsedNotificationCount,
+	Exception? Exception);
+
 /// <summary>
 /// Acquires ordered native folder-change notifications without interpreting them for the UI.
 /// </summary>
@@ -110,13 +128,18 @@ internal sealed class Win32FolderChangeSource
 	private readonly string path;
 	private readonly bool includeAttributes;
 	private readonly IWin32FolderChangeNative native;
+	private readonly Action<Win32FolderChangeDiagnostic> reportDiagnostic;
 
 	public Win32FolderChangeSource(string path, bool includeAttributes)
-		: this(path, includeAttributes, new Win32FolderChangeNative())
+		: this(path, includeAttributes, new Win32FolderChangeNative(), null)
 	{
 	}
 
-	internal Win32FolderChangeSource(string path, bool includeAttributes, IWin32FolderChangeNative native)
+	internal Win32FolderChangeSource(
+		string path,
+		bool includeAttributes,
+		IWin32FolderChangeNative native,
+		Action<Win32FolderChangeDiagnostic>? reportDiagnostic = null)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(path);
 		ArgumentNullException.ThrowIfNull(native);
@@ -124,6 +147,7 @@ internal sealed class Win32FolderChangeSource
 		this.path = path;
 		this.includeAttributes = includeAttributes;
 		this.native = native;
+		this.reportDiagnostic = reportDiagnostic ?? LogDiagnostic;
 	}
 
 	public Task WatchAsync(
@@ -148,10 +172,26 @@ internal sealed class Win32FolderChangeSource
 		if (cancellationToken.IsCancellationRequested)
 			return;
 
+		var watcherId = Guid.NewGuid();
+		var stopwatch = Stopwatch.StartNew();
+		var parsedNotificationCount = 0;
+		var watchStarted = false;
+		var failureReported = false;
 		var watchHandle = native.CreateWatchHandle(path);
 
 		if (watchHandle == IntPtr.Zero || watchHandle.ToInt64() == INVALID_HANDLE_VALUE)
+		{
+			stopwatch.Stop();
+			reportDiagnostic(new(
+				Win32FolderChangeLifecycle.Completed,
+				watcherId,
+				LogPathHelper.GetPathIdentifier(path),
+				stopwatch.Elapsed,
+				false,
+				0,
+				null));
 			return;
+		}
 
 		var cancellationRequested = 0;
 		void CancelPendingIo()
@@ -181,6 +221,15 @@ internal sealed class Win32FolderChangeSource
 			if (cancellationToken.IsCancellationRequested)
 				return;
 
+			watchStarted = true;
+			reportDiagnostic(new(
+				Win32FolderChangeLifecycle.Started,
+				watcherId,
+				LogPathHelper.GetPathIdentifier(path),
+				stopwatch.Elapsed,
+				true,
+				0,
+				null));
 			onStarted?.Invoke();
 
 			while (!cancellationToken.IsCancellationRequested)
@@ -221,6 +270,7 @@ internal sealed class Win32FolderChangeSource
 				var notifications = Win32FolderChangeParser.Parse(
 					buffer.AsSpan(0, checked((int)bytesTransferred)),
 					path);
+				parsedNotificationCount += notifications.Count;
 
 				if (notifications.Count > 0 && !cancellationToken.IsCancellationRequested)
 					publishBatch(notifications);
@@ -234,10 +284,15 @@ internal sealed class Win32FolderChangeSource
 		}
 		catch (Exception ex)
 		{
-			App.Logger.LogWarning(
-				ex,
-				"Win32 folder change source failed for {PathIdentifier}.",
-				LogPathHelper.GetPathIdentifier(path));
+			failureReported = true;
+			reportDiagnostic(new(
+				Win32FolderChangeLifecycle.Failed,
+				watcherId,
+				LogPathHelper.GetPathIdentifier(path),
+				stopwatch.Elapsed,
+				watchStarted,
+				parsedNotificationCount,
+				ex));
 			throw;
 		}
 		finally
@@ -246,6 +301,41 @@ internal sealed class Win32FolderChangeSource
 			native.CloseHandle(watchHandle);
 			if (bufferPointer != IntPtr.Zero)
 				Marshal.FreeHGlobal(bufferPointer);
+			stopwatch.Stop();
+			if (!failureReported)
+				reportDiagnostic(new(
+					cancellationToken.IsCancellationRequested ? Win32FolderChangeLifecycle.Canceled : Win32FolderChangeLifecycle.Completed,
+					watcherId,
+					LogPathHelper.GetPathIdentifier(path),
+					stopwatch.Elapsed,
+					watchStarted,
+					parsedNotificationCount,
+					null));
 		}
+	}
+
+	private static void LogDiagnostic(Win32FolderChangeDiagnostic diagnostic)
+	{
+		var message = "Win32 folder change source {Lifecycle} for {PathIdentifier}; watcher {WatcherId}, elapsed {ElapsedMs} ms, parsed {ParsedNotificationCount} notifications.";
+		if (diagnostic.Lifecycle == Win32FolderChangeLifecycle.Failed)
+		{
+			App.Logger.LogWarning(
+				diagnostic.Exception,
+				message,
+				diagnostic.Lifecycle,
+				diagnostic.PathIdentifier,
+				diagnostic.WatcherId,
+				diagnostic.Elapsed.TotalMilliseconds,
+				diagnostic.ParsedNotificationCount);
+			return;
+		}
+
+		App.Logger.LogInformation(
+			message,
+			diagnostic.Lifecycle,
+			diagnostic.PathIdentifier,
+			diagnostic.WatcherId,
+			diagnostic.Elapsed.TotalMilliseconds,
+			diagnostic.ParsedNotificationCount);
 	}
 }
