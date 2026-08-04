@@ -14,6 +14,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Microsoft.Win32.SafeHandles;
 using Windows.Win32;
 using OVERLAPPED = Files.App.Helpers.Win32PInvoke.OVERLAPPED;
+using static Files.App.Helpers.Win32PInvoke;
 
 namespace Files.App.UnitTests;
 
@@ -183,6 +184,21 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_IncludesAttributeFilterWhenRequested()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative
+		{
+			CompletionBuffer = CreateBuffer((Win32FolderChangeAction.Modified, "one.txt"))
+		};
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: true, native);
+
+		await source.WatchAsync(_ => cancellationSource.Cancel(), cancellationSource.Token);
+
+		Assert.AreNotEqual(0, native.NotifyFilters & FILE_NOTIFY_CHANGE_ATTRIBUTES);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();
@@ -328,6 +344,7 @@ public sealed class Win32FolderChangeSourceTests
 		public int ReadCallCount { get; private set; }
 		public int CancelCallCount { get; private set; }
 		public int CloseHandleCallCount { get; private set; }
+		public int NotifyFilters { get; private set; }
 		public IntPtr SubmittedBuffer { get; private set; }
 		public IntPtr CompletedBuffer { get; private set; }
 		private ManualResetEventSlim CancellationRequested { get; } = new();
@@ -349,6 +366,7 @@ public sealed class Win32FolderChangeSourceTests
 			ReadCallCount++;
 			ReadSubmitted.Set();
 			SubmittedBuffer = buffer;
+			NotifyFilters = notifyFilters;
 			if (ReadErrorCode is int readErrorCode)
 			{
 				errorCode = readErrorCode;
