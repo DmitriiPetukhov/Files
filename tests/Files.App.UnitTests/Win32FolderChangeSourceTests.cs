@@ -57,6 +57,46 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public void Parse_RejectsTruncatedHeader()
+		=> AssertFormatException(() => Win32FolderChangeParser.Parse(new byte[11], @"C:\Folder"));
+
+	[TestMethod]
+	public void Parse_RejectsTruncatedSubsequentRecord()
+	{
+		var buffer = CreateBuffer(
+			(Win32FolderChangeAction.Added, "one.txt"),
+			(Win32FolderChangeAction.Removed, "two.txt"));
+		Array.Resize(ref buffer, 36);
+
+		AssertFormatException(() => Win32FolderChangeParser.Parse(buffer, @"C:\Folder"));
+	}
+
+	[TestMethod]
+	public void Parse_RejectsZeroOrOddFileNameLengths()
+	{
+		var zeroLengthBuffer = CreateBuffer((Win32FolderChangeAction.Added, "one.txt"));
+		BinaryPrimitives.WriteUInt32LittleEndian(zeroLengthBuffer.AsSpan(8, 4), 0);
+
+		var oddLengthBuffer = CreateBuffer((Win32FolderChangeAction.Added, "one.txt"));
+		BinaryPrimitives.WriteUInt32LittleEndian(oddLengthBuffer.AsSpan(8, 4), 1);
+
+		AssertFormatException(() => Win32FolderChangeParser.Parse(zeroLengthBuffer, @"C:\Folder"));
+		AssertFormatException(() => Win32FolderChangeParser.Parse(oddLengthBuffer, @"C:\Folder"));
+	}
+
+	[TestMethod]
+	public void Parse_RejectsFileNameCrossingRecordBoundary()
+	{
+		var buffer = CreateBuffer(
+			(Win32FolderChangeAction.Added, "one.txt"),
+			(Win32FolderChangeAction.Removed, "two.txt"));
+		var firstRecordLength = AlignToFourBytes(12 + Encoding.Unicode.GetByteCount("one.txt"));
+		BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(8, 4), (uint)(firstRecordLength - 12 + 2));
+
+		AssertFormatException(() => Win32FolderChangeParser.Parse(buffer, @"C:\Folder"));
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_PropagatesCallbackFailure()
 	{
 		var folderPath = Path.Combine(Path.GetTempPath(), $"Files-{Guid.NewGuid():N}");
