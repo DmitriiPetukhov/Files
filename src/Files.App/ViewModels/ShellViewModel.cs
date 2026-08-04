@@ -2040,6 +2040,7 @@ namespace Files.App.ViewModels
 			aProcessQueueAction = null;
 			gitProcessQueueAction = null;
 			watcherCTS?.Cancel();
+			operationQueue.Clear();
 			watcherCTS = new CancellationTokenSource();
 		}
 
@@ -2556,112 +2557,41 @@ namespace Files.App.ViewModels
 
 		private void WatchForDirectoryChanges(string path, CloudDriveSyncStatus syncStatus)
 		{
-			Debug.WriteLine($"WatchForDirectoryChanges: {path}");
-			var hWatchDir = Win32PInvoke.CreateFileFromApp(path, 1, 1 | 2 | 4,
-				IntPtr.Zero, 3, (uint)Win32PInvoke.File_Attributes.BackupSemantics | (uint)Win32PInvoke.File_Attributes.Overlapped, IntPtr.Zero);
-			if (hWatchDir.ToInt64() == -1)
-				return;
-
 			var hasSyncStatus = syncStatus != CloudDriveSyncStatus.NotSynced && syncStatus != CloudDriveSyncStatus.Unknown;
+			var watcherToken = watcherCTS.Token;
 
-			aProcessQueueAction ??= Task.Factory.StartNew(() => ProcessOperationQueueAsync(watcherCTS.Token, hasSyncStatus), default,
+			aProcessQueueAction ??= Task.Factory.StartNew(() => ProcessOperationQueueAsync(watcherToken, hasSyncStatus), default,
 				TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-			var aWatcherAction = Windows.System.Threading.ThreadPool.RunAsync((x) =>
+			var source = new Win32FolderChangeSource(path, hasSyncStatus);
+			_ = ObserveDirectoryChangeSourceAsync(source, watcherToken);
+		}
+
+		private async Task ObserveDirectoryChangeSourceAsync(
+			Win32FolderChangeSource source,
+			CancellationToken cancellationToken)
+		{
+			try
 			{
-				var buff = new byte[4096];
-				var rand = Guid.NewGuid();
-				var notifyFilters = FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE;
-
-				if (hasSyncStatus)
-					notifyFilters |= FILE_NOTIFY_CHANGE_ATTRIBUTES;
-
-				var overlapped = new OVERLAPPED();
-				using var eventHandle = PInvoke.CreateEvent(null, false, false, null);
-				overlapped.hEvent = eventHandle.DangerousGetHandle();
-				const uint INFINITE = 0xFFFFFFFF;
-
-				while (x.Status != AsyncStatus.Canceled)
+				await source.WatchAsync(notifications =>
 				{
-					unsafe
+					foreach (var notification in notifications)
 					{
-						fixed (byte* pBuff = buff)
-						{
-							ref var notifyInformation = ref Unsafe.As<byte, FILE_NOTIFY_INFORMATION>(ref buff[0]);
-							if (x.Status != AsyncStatus.Canceled)
-							{
-								ReadDirectoryChangesW(hWatchDir, pBuff,
-								4096, false,
-								notifyFilters, null,
-								ref overlapped, null);
-							}
-							else
-							{
-								break;
-							}
-
-							Debug.WriteLine("waiting: {0}", rand);
-							if (x.Status == AsyncStatus.Canceled)
-								break;
-
-							var rc = WaitForSingleObjectEx(overlapped.hEvent, INFINITE, true);
-							Debug.WriteLine("wait done: {0}", rand);
-
-							uint offset = 0;
-							ref var notifyInfo = ref Unsafe.As<byte, FILE_NOTIFY_INFORMATION>(ref buff[offset]);
-							if (x.Status == AsyncStatus.Canceled)
-								break;
-
-							do
-							{
-								notifyInfo = ref Unsafe.As<byte, FILE_NOTIFY_INFORMATION>(ref buff[offset]);
-								string? FileName = null;
-								unsafe
-								{
-									fixed (char* name = notifyInfo.FileName)
-									{
-										FileName = Path.Combine(path, new string(name, 0, (int)notifyInfo.FileNameLength / 2));
-									}
-								}
-
-								uint action = notifyInfo.Action;
-
-								Debug.WriteLine("action: {0}", action);
-
-								operationQueue.Enqueue((action, FileName));
-
-								offset += notifyInfo.NextEntryOffset;
-							}
-							while (notifyInfo.NextEntryOffset != 0 && x.Status != AsyncStatus.Canceled);
-
-							operationEvent.Set();
-
-							//ResetEvent(overlapped.hEvent);
-							Debug.WriteLine("Task running...");
-						}
+						if (notification.Action != Win32FolderChangeAction.Unknown)
+							operationQueue.Enqueue(((uint)notification.Action, notification.FullPath));
 					}
-				}
 
-				operationQueue.Clear();
-
-				Debug.WriteLine("aWatcherAction done: {0}", rand);
-			});
-
-			watcherCTS.Token.Register(() =>
+					if (notifications.Count > 0)
+						operationEvent.Set();
+				}, cancellationToken);
+			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 			{
-				if (aWatcherAction is not null)
-				{
-					aWatcherAction?.Cancel();
-
-					// Prevent duplicate execution of this block
-					aWatcherAction = null;
-
-					Debug.WriteLine("watcher canceled");
-				}
-
-				CancelIoEx(hWatchDir, IntPtr.Zero);
-				CloseHandle(hWatchDir);
-			});
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogWarning(ex, "Directory change source task failed.");
+			}
 		}
 
 		private void WatchForGitChanges()
