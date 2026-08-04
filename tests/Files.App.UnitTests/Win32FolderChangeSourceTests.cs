@@ -248,6 +248,32 @@ public sealed class Win32FolderChangeSourceTests
 		Assert.IsFalse(gate.TryRun(generation, cancellationSource.Token, () => queue.Enqueue(2)));
 	}
 
+	[TestMethod]
+	public void QueueAdapter_PublishesKnownActionsAndSignalsBatch()
+	{
+		var gate = new FolderChangeQueueGate();
+		var generation = gate.CaptureGeneration();
+		var queue = new ConcurrentQueue<(uint Action, string FileName)>();
+		var signalCount = 0;
+		var adapter = new Win32FolderChangeQueueAdapter(queue, gate, () => signalCount++);
+		var notifications = new[]
+		{
+			new Win32FolderChangeNotification(Win32FolderChangeAction.Added, @"C:\Folder\added.txt"),
+			new Win32FolderChangeNotification(Win32FolderChangeAction.Unknown, @"C:\Folder\ignored.txt"),
+			new Win32FolderChangeNotification(Win32FolderChangeAction.Removed, @"C:\Folder\removed.txt")
+		};
+
+		Assert.IsTrue(adapter.Publish(generation, CancellationToken.None, notifications));
+		CollectionAssert.AreEqual(
+			new[]
+			{
+				((uint)Win32FolderChangeAction.Added, @"C:\Folder\added.txt"),
+				((uint)Win32FolderChangeAction.Removed, @"C:\Folder\removed.txt")
+			},
+			queue.ToArray());
+		Assert.AreEqual(1, signalCount);
+	}
+
 	private static byte[] CreateBuffer(params (Win32FolderChangeAction Action, string Name)[] records)
 	{
 		var encodedNames = new List<byte[]>();

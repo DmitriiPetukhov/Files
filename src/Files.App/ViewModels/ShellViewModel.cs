@@ -39,6 +39,7 @@ namespace Files.App.ViewModels
 		private readonly ConcurrentDictionary<string, CancellationTokenSource> thumbnailRetryDebounce;
 		private readonly ConcurrentQueue<(uint Action, string FileName)> operationQueue;
 		private readonly FolderChangeQueueGate operationQueueGate;
+		private readonly Win32FolderChangeQueueAdapter operationQueueAdapter;
 		private readonly ConcurrentQueue<uint> gitChangesQueue;
 		private readonly ConcurrentDictionary<string, bool> itemLoadQueue;
 		private readonly AsyncManualResetEvent operationEvent;
@@ -736,6 +737,7 @@ namespace Files.App.ViewModels
 			loadPropsCTS = new CancellationTokenSource();
 			watcherCTS = new CancellationTokenSource();
 			operationEvent = new AsyncManualResetEvent();
+			operationQueueAdapter = new Win32FolderChangeQueueAdapter(operationQueue, operationQueueGate, operationEvent.Set);
 			gitChangedEvent = new AsyncManualResetEvent();
 			enumFolderSemaphore = new SemaphoreSlim(1, 1);
 			getFileOrFolderSemaphore = new SemaphoreSlim(50);
@@ -2586,17 +2588,7 @@ namespace Files.App.ViewModels
 			{
 				await source.WatchAsync(notifications =>
 				{
-					operationQueueGate.TryRun(watcherGeneration, cancellationToken, () =>
-					{
-						foreach (var notification in notifications)
-						{
-							if (notification.Action != Win32FolderChangeAction.Unknown)
-								operationQueue.Enqueue(((uint)notification.Action, notification.FullPath));
-						}
-
-						if (notifications.Count > 0)
-							operationEvent.Set();
-					});
+					operationQueueAdapter.Publish(watcherGeneration, cancellationToken, notifications);
 				}, cancellationToken, onStarted);
 			}
 			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
