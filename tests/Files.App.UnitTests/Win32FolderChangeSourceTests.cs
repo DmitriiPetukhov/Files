@@ -271,6 +271,29 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_ReportsHandleCreationFailureDiagnostics()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { CreateWatchErrorCode = 5 };
+		var diagnostics = new List<Win32FolderChangeDiagnostic>();
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native, diagnostics.Add);
+
+		try
+		{
+			await source.WatchAsync(_ => { }, cancellationSource.Token);
+			Assert.Fail("Expected the watcher task to propagate handle creation failure.");
+		}
+		catch (Win32Exception exception)
+		{
+			Assert.AreEqual(5, exception.NativeErrorCode);
+		}
+
+		Assert.AreEqual(1, diagnostics.Count);
+		Assert.AreEqual(Win32FolderChangeLifecycle.Failed, diagnostics[0].Lifecycle);
+		Assert.IsNotNull(diagnostics[0].Exception);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();
@@ -492,6 +515,7 @@ public sealed class Win32FolderChangeSourceTests
 	{
 		public byte[] CompletionBuffer { get; init; } = [];
 		public IntPtr WatchHandle { get; init; } = new(1);
+		public int? CreateWatchErrorCode { get; init; }
 		public int? ReadErrorCode { get; init; }
 		public bool WaitForCancellation { get; init; }
 		public int? WaitErrorCode { get; init; }
@@ -507,7 +531,12 @@ public sealed class Win32FolderChangeSourceTests
 		private ManualResetEventSlim CancellationRequested { get; } = new();
 
 		public IntPtr CreateWatchHandle(string path)
-			=> WatchHandle;
+		{
+			if (CreateWatchErrorCode is int errorCode)
+				throw new Win32Exception(errorCode);
+
+			return WatchHandle;
+		}
 
 		public SafeFileHandle CreateEvent()
 		{

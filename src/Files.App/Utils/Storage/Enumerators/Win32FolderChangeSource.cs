@@ -177,21 +177,8 @@ internal sealed class Win32FolderChangeSource
 		var parsedNotificationCount = 0;
 		var watchStarted = false;
 		var failureReported = false;
-		var watchHandle = native.CreateWatchHandle(path);
-
-		if (watchHandle == IntPtr.Zero || watchHandle.ToInt64() == INVALID_HANDLE_VALUE)
-		{
-			stopwatch.Stop();
-			reportDiagnostic(new(
-				Win32FolderChangeLifecycle.Completed,
-				watcherId,
-				LogPathHelper.GetPathIdentifier(path),
-				stopwatch.Elapsed,
-				false,
-				0,
-				null));
-			return;
-		}
+		var diagnosticReported = false;
+		var watchHandle = IntPtr.Zero;
 
 		var cancellationRequested = 0;
 		void CancelPendingIo()
@@ -206,6 +193,23 @@ internal sealed class Win32FolderChangeSource
 
 		try
 		{
+			watchHandle = native.CreateWatchHandle(path);
+
+			if (watchHandle == IntPtr.Zero || watchHandle.ToInt64() == INVALID_HANDLE_VALUE)
+			{
+				stopwatch.Stop();
+				reportDiagnostic(new(
+					Win32FolderChangeLifecycle.Completed,
+					watcherId,
+					LogPathHelper.GetPathIdentifier(path),
+					stopwatch.Elapsed,
+					false,
+					0,
+					null));
+				diagnosticReported = true;
+				return;
+			}
+
 			var notifyFilters = FILE_NOTIFY_CHANGE_DIR_NAME |
 				FILE_NOTIFY_CHANGE_FILE_NAME |
 				FILE_NOTIFY_CHANGE_LAST_WRITE |
@@ -301,15 +305,19 @@ internal sealed class Win32FolderChangeSource
 		}
 		finally
 		{
-			CancelPendingIo();
-			if (readPending)
-				native.GetOverlappedResult(watchHandle, ref overlapped, out _, true, out _);
+			if (watchHandle != IntPtr.Zero && watchHandle.ToInt64() != INVALID_HANDLE_VALUE)
+			{
+				CancelPendingIo();
+				if (readPending)
+					native.GetOverlappedResult(watchHandle, ref overlapped, out _, true, out _);
+			}
 			eventHandle?.Dispose();
-			native.CloseHandle(watchHandle);
+			if (watchHandle != IntPtr.Zero && watchHandle.ToInt64() != INVALID_HANDLE_VALUE)
+				native.CloseHandle(watchHandle);
 			if (bufferPointer != IntPtr.Zero)
 				Marshal.FreeHGlobal(bufferPointer);
 			stopwatch.Stop();
-			if (!failureReported)
+			if (!failureReported && !diagnosticReported)
 				reportDiagnostic(new(
 					cancellationToken.IsCancellationRequested ? Win32FolderChangeLifecycle.Canceled : Win32FolderChangeLifecycle.Completed,
 					watcherId,
