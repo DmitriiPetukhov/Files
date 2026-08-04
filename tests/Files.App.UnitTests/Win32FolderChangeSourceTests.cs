@@ -170,6 +170,19 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_DoesNotStartWhenHandleIsUnavailable()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative { WatchHandle = IntPtr.Zero };
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+		var started = false;
+
+		await source.WatchAsync(_ => { }, cancellationSource.Token, () => started = true);
+
+		Assert.IsFalse(started);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();
@@ -282,6 +295,7 @@ public sealed class Win32FolderChangeSourceTests
 	private sealed class FakeNative : IWin32FolderChangeNative
 	{
 		public byte[] CompletionBuffer { get; init; } = [];
+		public IntPtr WatchHandle { get; init; } = new(1);
 		public int? ReadErrorCode { get; init; }
 		public bool WaitForCancellation { get; init; }
 		public ManualResetEventSlim ReadSubmitted { get; } = new();
@@ -293,7 +307,7 @@ public sealed class Win32FolderChangeSourceTests
 		private ManualResetEventSlim CancellationRequested { get; } = new();
 
 		public IntPtr CreateWatchHandle(string path)
-			=> new(1);
+			=> WatchHandle;
 
 		public SafeFileHandle CreateEvent()
 			=> new(new IntPtr(2), ownsHandle: false);

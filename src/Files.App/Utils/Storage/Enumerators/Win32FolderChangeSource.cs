@@ -128,12 +128,13 @@ internal sealed class Win32FolderChangeSource
 
 	public Task WatchAsync(
 		Action<IReadOnlyCollection<Win32FolderChangeNotification>> publishBatch,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		Action? onStarted = null)
 	{
 		ArgumentNullException.ThrowIfNull(publishBatch);
 
 		return Task.Factory.StartNew(
-			() => WatchCore(publishBatch, cancellationToken),
+			() => WatchCore(publishBatch, cancellationToken, onStarted),
 			CancellationToken.None,
 			TaskCreationOptions.LongRunning,
 			TaskScheduler.Default);
@@ -141,7 +142,8 @@ internal sealed class Win32FolderChangeSource
 
 	private void WatchCore(
 		Action<IReadOnlyCollection<Win32FolderChangeNotification>> publishBatch,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		Action? onStarted)
 	{
 		if (cancellationToken.IsCancellationRequested)
 			return;
@@ -176,6 +178,10 @@ internal sealed class Win32FolderChangeSource
 			overlapped.hEvent = eventHandle.DangerousGetHandle();
 
 			using var cancellationRegistration = cancellationToken.Register(CancelPendingIo);
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			onStarted?.Invoke();
 
 			while (!cancellationToken.IsCancellationRequested)
 			{

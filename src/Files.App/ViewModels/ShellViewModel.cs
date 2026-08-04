@@ -2566,17 +2566,21 @@ namespace Files.App.ViewModels
 			var watcherToken = watcherCTS.Token;
 			var watcherGeneration = operationQueueGate.CaptureGeneration();
 
-			aProcessQueueAction ??= Task.Factory.StartNew(() => ProcessOperationQueueAsync(watcherToken, hasSyncStatus), default,
-				TaskCreationOptions.LongRunning, TaskScheduler.Default);
-
 			var source = new Win32FolderChangeSource(path, hasSyncStatus);
-			_ = ObserveDirectoryChangeSourceAsync(source, watcherToken, watcherGeneration);
+			_ = ObserveDirectoryChangeSourceAsync(
+				source,
+				watcherToken,
+				watcherGeneration,
+				() => operationQueueGate.TryRun(watcherGeneration, watcherToken, () =>
+					aProcessQueueAction ??= Task.Factory.StartNew(() => ProcessOperationQueueAsync(watcherToken, hasSyncStatus), default,
+						TaskCreationOptions.LongRunning, TaskScheduler.Default)));
 		}
 
 		private async Task ObserveDirectoryChangeSourceAsync(
 			Win32FolderChangeSource source,
 			CancellationToken cancellationToken,
-			int watcherGeneration)
+			int watcherGeneration,
+			Action onStarted)
 		{
 			try
 			{
@@ -2593,7 +2597,7 @@ namespace Files.App.ViewModels
 						if (notifications.Count > 0)
 							operationEvent.Set();
 					});
-				}, cancellationToken);
+				}, cancellationToken, onStarted);
 			}
 			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 			{
