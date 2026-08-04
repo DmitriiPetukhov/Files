@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -153,6 +154,22 @@ public sealed class Win32FolderChangeSourceTests
 	}
 
 	[TestMethod]
+	public async Task WatchAsync_KeepsNativeBufferStableUntilCompletion()
+	{
+		using var cancellationSource = new CancellationTokenSource();
+		var native = new FakeNative
+		{
+			CompletionBuffer = CreateBuffer((Win32FolderChangeAction.Added, "one.txt"))
+		};
+		var source = new Win32FolderChangeSource(@"C:\Folder", includeAttributes: false, native);
+
+		await source.WatchAsync(_ => cancellationSource.Cancel(), cancellationSource.Token);
+
+		Assert.AreNotEqual(IntPtr.Zero, native.SubmittedBuffer);
+		Assert.AreEqual(native.SubmittedBuffer, native.CompletedBuffer);
+	}
+
+	[TestMethod]
 	public async Task WatchAsync_CancellationCleansUpWithoutCallback()
 	{
 		using var cancellationSource = new CancellationTokenSource();
@@ -271,6 +288,8 @@ public sealed class Win32FolderChangeSourceTests
 		public int ReadCallCount { get; private set; }
 		public int CancelCallCount { get; private set; }
 		public int CloseHandleCallCount { get; private set; }
+		public IntPtr SubmittedBuffer { get; private set; }
+		public IntPtr CompletedBuffer { get; private set; }
 		private ManualResetEventSlim CancellationRequested { get; } = new();
 
 		public IntPtr CreateWatchHandle(string path)
@@ -281,20 +300,22 @@ public sealed class Win32FolderChangeSourceTests
 
 		public bool ReadDirectoryChanges(
 			IntPtr watchHandle,
-			byte[] buffer,
+			IntPtr buffer,
+			int bufferLength,
 			int notifyFilters,
 			ref OVERLAPPED overlapped,
 			out int errorCode)
 		{
 			ReadCallCount++;
 			ReadSubmitted.Set();
+			SubmittedBuffer = buffer;
 			if (ReadErrorCode is int readErrorCode)
 			{
 				errorCode = readErrorCode;
 				return false;
 			}
 
-			CompletionBuffer.CopyTo(buffer, 0);
+			Marshal.Copy(CompletionBuffer, 0, buffer, CompletionBuffer.Length);
 			errorCode = 997;
 			return false;
 		}
@@ -315,6 +336,7 @@ public sealed class Win32FolderChangeSourceTests
 			bool wait,
 			out int errorCode)
 		{
+			CompletedBuffer = SubmittedBuffer;
 			bytesTransferred = (uint)CompletionBuffer.Length;
 			errorCode = 0;
 			return true;

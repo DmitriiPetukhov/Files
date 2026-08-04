@@ -16,7 +16,8 @@ internal interface IWin32FolderChangeNative
 	SafeFileHandle CreateEvent();
 	bool ReadDirectoryChanges(
 		IntPtr watchHandle,
-		byte[] buffer,
+		IntPtr buffer,
+		int bufferLength,
 		int notifyFilters,
 		ref OVERLAPPED overlapped,
 		out int errorCode);
@@ -48,25 +49,23 @@ internal sealed class Win32FolderChangeNative : IWin32FolderChangeNative
 
 	public unsafe bool ReadDirectoryChanges(
 		IntPtr watchHandle,
-		byte[] buffer,
+		IntPtr buffer,
+		int bufferLength,
 		int notifyFilters,
 		ref OVERLAPPED overlapped,
 		out int errorCode)
 	{
-		fixed (byte* bufferPointer = buffer)
-		{
-			var result = ReadDirectoryChangesW(
-				watchHandle,
-				bufferPointer,
-				buffer.Length,
-				false,
-				notifyFilters,
-				null,
-				ref overlapped,
-				null);
-			errorCode = result ? 0 : Marshal.GetLastWin32Error();
-			return result;
-		}
+		var result = ReadDirectoryChangesW(
+			watchHandle,
+			(byte*)buffer,
+			bufferLength,
+			false,
+			notifyFilters,
+			null,
+			ref overlapped,
+			null);
+		errorCode = result ? 0 : Marshal.GetLastWin32Error();
+		return result;
 	}
 
 	public uint WaitForSingleObjectEx(IntPtr eventHandle, uint timeout, bool alertable, out int errorCode)
@@ -158,6 +157,7 @@ internal sealed class Win32FolderChangeSource
 			if (Interlocked.Exchange(ref cancellationRequested, 1) == 0)
 				native.CancelIoEx(watchHandle);
 		}
+		IntPtr bufferPointer = IntPtr.Zero;
 
 		try
 		{
@@ -170,6 +170,7 @@ internal sealed class Win32FolderChangeSource
 				notifyFilters |= FILE_NOTIFY_CHANGE_ATTRIBUTES;
 
 			var buffer = new byte[BufferSize];
+			bufferPointer = Marshal.AllocHGlobal(BufferSize);
 			var overlapped = new OVERLAPPED();
 			using var eventHandle = native.CreateEvent();
 			overlapped.hEvent = eventHandle.DangerousGetHandle();
@@ -180,7 +181,8 @@ internal sealed class Win32FolderChangeSource
 			{
 				if (!native.ReadDirectoryChanges(
 					watchHandle,
-					buffer,
+					bufferPointer,
+					BufferSize,
 					notifyFilters,
 					ref overlapped,
 					out var readErrorCode) && readErrorCode != ErrorIoPending)
@@ -208,6 +210,8 @@ internal sealed class Win32FolderChangeSource
 				if (bytesTransferred == 0)
 					continue;
 
+				Marshal.Copy(bufferPointer, buffer, 0, checked((int)bytesTransferred));
+
 				var notifications = Win32FolderChangeParser.Parse(
 					buffer.AsSpan(0, checked((int)bytesTransferred)),
 					path);
@@ -234,6 +238,8 @@ internal sealed class Win32FolderChangeSource
 		{
 			CancelPendingIo();
 			native.CloseHandle(watchHandle);
+			if (bufferPointer != IntPtr.Zero)
+				Marshal.FreeHGlobal(bufferPointer);
 		}
 	}
 }
