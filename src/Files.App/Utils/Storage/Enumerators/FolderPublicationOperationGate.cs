@@ -4,9 +4,9 @@
 namespace Files.App.Utils.Storage;
 
 /// <summary>
-/// Serializes publication-session mutation and snapshot application.
+/// Serializes publication-session mutation, snapshot application, and related operations.
 /// </summary>
-internal sealed class FolderPublicationSnapshotGate
+internal sealed class FolderPublicationOperationGate
 {
 	private readonly SemaphoreSlim semaphore = new(1, 1);
 

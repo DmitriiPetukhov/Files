@@ -7,7 +7,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace Files.App.UnitTests;
 
 [TestClass]
-public sealed class FolderPublicationSnapshotGateTests
+public sealed class FolderPublicationOperationGateTests
 {
 	[TestMethod]
 	public async Task ExecuteAsync_SerializesPublicationOperations()
@@ -15,7 +15,7 @@ public sealed class FolderPublicationSnapshotGateTests
 		using var firstEntered = new ManualResetEventSlim();
 		using var releaseFirst = new ManualResetEventSlim();
 		using var secondEntered = new ManualResetEventSlim();
-		var gate = new FolderPublicationSnapshotGate();
+		var gate = new FolderPublicationOperationGate();
 
 		try
 		{

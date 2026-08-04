@@ -10,7 +10,7 @@ namespace Files.App.Utils.Storage;
 internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordinator<T>
 {
 	private readonly IFolderPublicationSession<T> session;
-	private readonly FolderPublicationSnapshotGate snapshotGate = new();
+	private readonly FolderPublicationOperationGate operationGate = new();
 	private readonly Func<IReadOnlyCollection<T>, Task> publishSnapshotAsync;
 	private int isActive = 1;
 
@@ -48,7 +48,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	{
 		ArgumentNullException.ThrowIfNull(itemComparer);
 
-		return snapshotGate.ExecuteAsync(async () =>
+		return operationGate.ExecuteAsync(async () =>
 		{
 			if (!CanPublish(cancellationToken))
 				return false;
@@ -73,7 +73,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 		Interlocked.Exchange(ref isActive, 0);
 		session.Cancel();
 
-		return snapshotGate.ExecuteAsync(() =>
+		return operationGate.ExecuteAsync(() =>
 			Task.FromResult(true));
 	}
 
@@ -83,7 +83,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	{
 		ArgumentNullException.ThrowIfNull(batch);
 
-		return snapshotGate.ExecuteAsync(async () =>
+		return operationGate.ExecuteAsync(async () =>
 		{
 			if (!CanPublish(cancellationToken))
 				return false;
@@ -103,7 +103,7 @@ internal sealed class FolderPublicationCoordinator<T> : IFolderPublicationCoordi
 	{
 		ArgumentNullException.ThrowIfNull(items);
 
-		return snapshotGate.ExecuteAsync(async () =>
+		return operationGate.ExecuteAsync(async () =>
 		{
 			if (!CanPublish(cancellationToken))
 				return false;
