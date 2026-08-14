@@ -17,6 +17,7 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 - For UI work, use existing XAML resources, controls, converters, commands, and localization patterns. Avoid one-off styles or hard-coded user-visible strings.
 - Start by identifying the smallest relevant project, feature area, and files for the task.
 - Read nearby code before adding new abstractions. Prefer existing WinUI, MVVM, service, command, and storage patterns.
+- Keep each class in its own file named after the class; place the file under the semantic namespace path, and make the namespace match the class's purpose and domain.
 - Keep implementation scoped to the requested behavior. Avoid opportunistic refactors, formatting churn, dependency updates, and generated file edits.
 - Treat tool output as evidence. When behavior changes, run the focused build that can prove it and report anything left unverified.
 
