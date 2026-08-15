@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Helpers;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators.Win32;
+using Files.App.UnitTests.TestHelpers;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Enumerators;
 using Files.App.Utils.Storage.Enumerators.Win32;
@@ -17,7 +18,19 @@ namespace Files.App.UnitTests.Utils.Storage.Enumerators.Win32;
 [TestClass]
 public sealed class Win32FolderEnumerationSourceTests
 {
-	private const string FolderPath = @"C:\EnumerationTests";
+	private TemporaryTestDirectory temporaryDirectory = null!;
+
+	private string FolderPath => temporaryDirectory.DirectoryPath;
+
+	/// <summary>Creates an isolated directory for the test.</summary>
+	[TestInitialize]
+	public void CreateTemporaryDirectory()
+		=> temporaryDirectory = new TemporaryTestDirectory();
+
+	/// <summary>Removes the isolated directory after the test.</summary>
+	[TestCleanup]
+	public void CleanupTemporaryDirectory()
+		=> temporaryDirectory.Dispose();
 
 	/// <summary>Ensures entries are emitted in order as bounded batches.</summary>
 	[TestMethod]

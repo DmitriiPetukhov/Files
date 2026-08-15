@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Helpers;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators.Win32;
+using Files.App.UnitTests.TestHelpers;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Enumerators.Win32;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -18,7 +19,19 @@ namespace Files.App.UnitTests.Utils.Storage.Enumerators.Win32;
 [TestClass]
 public sealed class Win32FolderEnumerationSourceResolutionTests
 {
-	private const string FolderPath = @"C:\EnumerationTests";
+	private TemporaryTestDirectory temporaryDirectory = null!;
+
+	private string FolderPath => temporaryDirectory.DirectoryPath;
+
+	/// <summary>Creates an isolated directory for the test.</summary>
+	[TestInitialize]
+	public void CreateTemporaryDirectory()
+		=> temporaryDirectory = new TemporaryTestDirectory();
+
+	/// <summary>Removes the isolated directory after the test.</summary>
+	[TestCleanup]
+	public void CleanupTemporaryDirectory()
+		=> temporaryDirectory.Dispose();
 
 	/// <summary>Ensures resolution uses a fresh lookup and returns current metadata.</summary>
 	[TestMethod]
