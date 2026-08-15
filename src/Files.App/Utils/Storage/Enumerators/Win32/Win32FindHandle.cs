@@ -27,7 +27,8 @@ internal sealed partial class Win32FindHandle : IWin32FindHandle
 		string searchPattern,
 		out Win32FindHandle? findHandle,
 		out WIN32_FIND_DATA firstFindData,
-		out int nativeErrorCode)
+		out int nativeErrorCode,
+		out Win32FindHandleOpenStatus openStatus)
 	{
 		var nativeHandle = Win32PInvoke.FindFirstFileExFromApp(
 			searchPattern,
@@ -41,11 +42,15 @@ internal sealed partial class Win32FindHandle : IWin32FindHandle
 		{
 			findHandle = null;
 			nativeErrorCode = Marshal.GetLastWin32Error();
+			openStatus = nativeHandle == IntPtr.Zero
+				? Win32FindHandleOpenStatus.ZeroHandle
+				: Win32FindHandleOpenStatus.InvalidHandle;
 			return false;
 		}
 
 		findHandle = new Win32FindHandle(nativeHandle);
 		nativeErrorCode = 0;
+		openStatus = Win32FindHandleOpenStatus.Opened;
 		return true;
 	}
 

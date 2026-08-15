@@ -53,14 +53,41 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-		if (!Win32FindHandle.TryOpen(Path.Combine(path, "*.*"), out var findHandle, out var firstFindData, out var nativeErrorCode))
+		var openResult = Open(path, CancellationToken.None);
+		if (openResult.Source is null)
 		{
-			var exception = new Win32Exception(nativeErrorCode);
+			var exception = new Win32Exception(openResult.NativeErrorCode);
 			LogFailure(path, exception);
 			throw exception;
 		}
 
-		return new Win32FolderEnumerationSource(path, findHandle!, firstFindData);
+		return openResult.Source;
+	}
+
+	/// <summary>Opens a Win32 folder source while keeping handle ownership at the source boundary.</summary>
+	internal static async Task<Win32FolderEnumerationOpenResult> TryOpenAsync(
+		string path,
+		CancellationToken cancellationToken)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+		try
+		{
+			var openResult = await Task.Run(() => Open(path, cancellationToken), cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+			{
+				if (openResult.Source is not null)
+					await openResult.Source.DisposeAsync();
+
+				return CanceledResult();
+			}
+
+			return openResult;
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			return CanceledResult();
+		}
 	}
 
 	/// <inheritdoc />
@@ -179,19 +206,20 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 		var metadata = new FolderItemMetadata(
 			isFolder ? null : findData.GetSize(),
 			null,
-			null);
+			null,
+			((FileAttributes)findData.dwFileAttributes).HasFlag(FileAttributes.Hidden));
 
 		return new FolderItem(
 			new FolderItemKey(ProviderId, itemPath),
 			findData.cFileName,
 			isFolder ? FolderItemKind.Folder : FolderItemKind.File,
 			metadata,
-			null);
+			new Win32FolderItemData(findData));
 	}
 
 	private (IWin32FindHandle Handle, WIN32_FIND_DATA FindData)? OpenForResolution(string itemPath)
 	{
-		if (Win32FindHandle.TryOpen(itemPath, out var handle, out var findData, out var nativeErrorCode))
+		if (Win32FindHandle.TryOpen(itemPath, out var handle, out var findData, out var nativeErrorCode, out _))
 			return (handle!, findData);
 
 		if ((WIN32_ERROR)nativeErrorCode is WIN32_ERROR.ERROR_FILE_NOT_FOUND or WIN32_ERROR.ERROR_PATH_NOT_FOUND)
@@ -212,6 +240,76 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 			throw new ArgumentException("The item key belongs to another folder.", nameof(itemKey));
 
 		return itemPath;
+	}
+
+	private static Win32FolderEnumerationOpenResult Open(string path, CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+
+		if (Win32FindHandle.TryOpen(
+			Path.Combine(path, "*.*"),
+			out var findHandle,
+			out var firstFindData,
+			out var nativeErrorCode,
+			out var openStatus))
+		{
+			var source = new Win32FolderEnumerationSource(path, findHandle!, firstFindData);
+			var initialMetadata = CreateInitialMetadata(firstFindData);
+			if (cancellationToken.IsCancellationRequested)
+			{
+				source.DisposeAsync().GetAwaiter().GetResult();
+				cancellationToken.ThrowIfCancellationRequested();
+			}
+
+			return new Win32FolderEnumerationOpenResult(
+				Win32FolderEnumerationOpenStatus.Opened,
+				source,
+				initialMetadata,
+				nativeErrorCode);
+		}
+
+		cancellationToken.ThrowIfCancellationRequested();
+
+		return new Win32FolderEnumerationOpenResult(
+			openStatus switch
+			{
+				Win32FindHandleOpenStatus.ZeroHandle => Win32FolderEnumerationOpenStatus.ZeroHandle,
+				Win32FindHandleOpenStatus.InvalidHandle => Win32FolderEnumerationOpenStatus.InvalidHandle,
+				_ => throw new InvalidOperationException("The Win32 find handle open status is invalid."),
+			},
+			null,
+			null,
+			nativeErrorCode);
+	}
+
+	private static Win32FolderEnumerationOpenResult CanceledResult()
+		=> new(
+			Win32FolderEnumerationOpenStatus.Canceled,
+			null,
+			default,
+			0);
+
+	private static FolderItemMetadata CreateInitialMetadata(WIN32_FIND_DATA findData)
+		=> new(
+			((FileAttributes)findData.dwFileAttributes).HasFlag(FileAttributes.Directory) ? null : findData.GetSize(),
+			ConvertFileTime(findData.ftCreationTime),
+			ConvertFileTime(findData.ftLastWriteTime),
+			((FileAttributes)findData.dwFileAttributes).HasFlag(FileAttributes.Hidden));
+
+	private static DateTimeOffset? ConvertFileTime(System.Runtime.InteropServices.ComTypes.FILETIME fileTime)
+	{
+		if (fileTime.dwHighDateTime == 0 && fileTime.dwLowDateTime == 0)
+			return null;
+
+		try
+		{
+			var value = ((long)fileTime.dwHighDateTime << 32) | (uint)fileTime.dwLowDateTime;
+			return DateTimeOffset.FromFileTime(value);
+		}
+		catch (ArgumentOutOfRangeException)
+		{
+			return null;
+		}
 	}
 
 	private void ThrowIfDisposed()

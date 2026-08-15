@@ -56,6 +56,29 @@ public sealed class Win32FolderEnumerationSourceTests
 		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
+	/// <summary>Ensures each item carries the native snapshot needed by the legacy UI materializer.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_PreservesWin32FindDataInProviderData()
+	{
+		var firstEntry = CreateFindData("item.txt");
+		firstEntry.dwFileAttributes = (uint)(FileAttributes.Hidden | FileAttributes.Archive);
+		firstEntry.nFileSizeLow = 1234;
+		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		await using var source = new Win32FolderEnumerationSource(FolderPath, handle, firstEntry);
+
+		var items = new List<FolderItem>();
+		await foreach (var batch in source.EnumerateAsync())
+			items.AddRange(batch.Items);
+
+		var item = items.Single();
+
+		var providerData = item.ProviderData as Win32FolderItemData;
+		Assert.IsNotNull(providerData);
+		Assert.AreEqual(firstEntry.cFileName, providerData.FindData.cFileName);
+		Assert.AreEqual(firstEntry.dwFileAttributes, providerData.FindData.dwFileAttributes);
+		Assert.AreEqual(firstEntry.nFileSizeLow, providerData.FindData.nFileSizeLow);
+	}
+
 	/// <summary>Ensures a full batch is yielded before the next native entry is requested.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_YieldsBatchBeforeReadingNextEntry()
@@ -249,6 +272,32 @@ public sealed class Win32FolderEnumerationSourceTests
 			Win32FolderEnumerationSource.TryCreate(null!));
 
 		Assert.AreEqual("path", exception.ParamName);
+	}
+
+	/// <summary>Ensures a native invalid handle remains available for the UI fallback branch.</summary>
+	[TestMethod]
+	public async Task TryOpenAsync_ReturnsInvalidHandleResultForMissingFolder()
+	{
+		var missingPath = Path.Combine(FolderPath, "missing");
+
+		var result = await Win32FolderEnumerationSource.TryOpenAsync(missingPath, CancellationToken.None);
+
+		Assert.AreEqual(Win32FolderEnumerationOpenStatus.InvalidHandle, result.Status);
+		Assert.IsNull(result.Source);
+		Assert.IsTrue(result.NativeErrorCode != 0);
+	}
+
+	/// <summary>Ensures cancellation returns a non-owning result without opening a source.</summary>
+	[TestMethod]
+	public async Task TryOpenAsync_ReturnsCanceledResultWhenCanceledBeforeOpen()
+	{
+		using var cancellationTokenSource = new CancellationTokenSource();
+		cancellationTokenSource.Cancel();
+
+		var result = await Win32FolderEnumerationSource.TryOpenAsync(FolderPath, cancellationTokenSource.Token);
+
+		Assert.AreEqual(Win32FolderEnumerationOpenStatus.Canceled, result.Status);
+		Assert.IsNull(result.Source);
 	}
 
 	/// <summary>Ensures source disposal is idempotent.</summary>

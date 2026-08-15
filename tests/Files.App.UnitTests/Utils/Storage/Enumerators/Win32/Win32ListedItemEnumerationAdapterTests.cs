@@ -8,6 +8,7 @@ using Files.App.Helpers;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators.Win32;
 using Files.App.UnitTests.TestHelpers;
 using Files.App.Utils;
+using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Enumerators.Win32;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Projections;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -67,6 +68,30 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
+	/// <summary>Ensures the compatibility materializer receives provider-specific Win32 snapshots.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_UsesLegacyMaterializerForWin32Snapshots()
+	{
+		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		await using var source = new Win32FolderEnumerationSource(FolderPath, handle, CreateFindData("item.txt"));
+		FolderItem? materializedItem = null;
+		var adapter = new Win32ListedItemEnumerationAdapter(
+			source,
+			FolderItemListedItemProjectionTestFactory.Create(),
+			legacyRootPath: FolderPath,
+			legacyMaterializer: async (items, _) =>
+			{
+				materializedItem = items.Single();
+				return [CreateListedItem(materializedItem.Name)];
+			});
+
+		var finalItems = await adapter.EnumerateAsync(_ => Task.CompletedTask, CancellationToken.None);
+
+		Assert.IsNotNull(materializedItem);
+		Assert.IsTrue(materializedItem.ProviderData is Win32FolderItemData);
+		Assert.AreEqual("item.txt", finalItems.Single().ItemNameRaw);
+	}
+
 	/// <summary>Ensures source failures propagate through the compatibility adapter.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_PropagatesSourceFailure()
@@ -113,6 +138,13 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			cFileName = name,
 			dwFileAttributes = isDirectory ? (uint)FileAttributes.Directory : 0u,
 		};
+
+	private static ListedItem CreateListedItem(string name)
+	{
+		var item = (ListedItem)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ListedItem));
+		item.ItemNameRaw = name;
+		return item;
+	}
 
 	private static async Task<TException> CaptureExceptionAsync<TException>(Func<Task> action)
 		where TException : Exception
