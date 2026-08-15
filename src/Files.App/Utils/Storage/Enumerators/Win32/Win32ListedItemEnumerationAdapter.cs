@@ -17,20 +17,17 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 	private readonly FolderItemListedItemProjection projection;
 	private readonly string? legacyRootPath;
 	private readonly bool isGitRepo;
-	private readonly Func<IReadOnlyCollection<FolderItem>, CancellationToken, Task<IReadOnlyCollection<ListedItem>>>? legacyMaterializer;
 
 	public Win32ListedItemEnumerationAdapter(
 		IFolderEnumerationSource source,
 		FolderItemListedItemProjection projection,
 		string? legacyRootPath = null,
-		bool isGitRepo = false,
-		Func<IReadOnlyCollection<FolderItem>, CancellationToken, Task<IReadOnlyCollection<ListedItem>>>? legacyMaterializer = null)
+		bool isGitRepo = false)
 	{
 		this.source = source ?? throw new ArgumentNullException(nameof(source));
 		this.projection = projection ?? throw new ArgumentNullException(nameof(projection));
 		this.legacyRootPath = legacyRootPath;
 		this.isGitRepo = isGitRepo;
-		this.legacyMaterializer = legacyMaterializer;
 	}
 
 	/// <inheritdoc />
@@ -43,11 +40,9 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 
 		await foreach (var batch in source.EnumerateAsync(cancellationToken))
 		{
-			var projectedItems = legacyMaterializer is not null
-				? await legacyMaterializer(batch.Items, cancellationToken)
-				: legacyRootPath is not null
-					? await MaterializeLegacyItemsAsync(batch.Items, cancellationToken)
-					: batch.Items.Select(projection.Project).ToList();
+			var projectedItems = legacyRootPath is not null
+				? await MaterializeLegacyItemsAsync(batch.Items, cancellationToken)
+				: batch.Items.Select(projection.Project).ToList();
 
 			if (projectedItems.Count == 0)
 				continue;
