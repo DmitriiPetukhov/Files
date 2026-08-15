@@ -2246,7 +2246,7 @@ namespace Files.App.ViewModels
 					{
 						await Task.Run(async () =>
 						{
-							IFolderEnumerationSource<ListedItem> source = new Win32FolderEnumerationSource(path, hFile, findData);
+							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(path, hFile, findData);
 							await publicationCoordinator.EnumerateAsync(source, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)

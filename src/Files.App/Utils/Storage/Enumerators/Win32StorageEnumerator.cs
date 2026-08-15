@@ -1,16 +1,22 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Extensions;
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
+using Files.App.Utils.Storage.Enumerators.Win32;
 using System.IO;
 using Windows.Storage;
 using FileAttributes = System.IO.FileAttributes;
 
 namespace Files.App.Utils.Storage
 {
+	/// <summary>Converts native Win32 entries into legacy listed items.</summary>
 	public static class Win32StorageEnumerator
 	{
+		private const int BatchSize = 32;
+		private const int BatchFlushIntervalMilliseconds = 500;
+
 		private static readonly ISizeProvider folderSizeProvider = Ioc.Default.GetService<ISizeProvider>();
 		private static readonly IStorageCacheService fileListCache = Ioc.Default.GetRequiredService<IStorageCacheService>();
 
@@ -18,20 +24,20 @@ namespace Files.App.Utils.Storage
 
 		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
 
-		public static async Task<List<ListedItem>> ListEntries(
+		/// <summary>Enumerates listed items and publishes intermediate batches.</summary>
+		internal static async Task<List<ListedItem>> ListEntries(
 			string path,
-			IntPtr hFile,
+			IWin32FindHandle findHandle,
 			Win32PInvoke.WIN32_FIND_DATA findData,
-			CancellationToken cancellationToken,
 			int countLimit,
-			Func<List<ListedItem>, Task> intermediateAction
+			Func<List<ListedItem>, Task> intermediateAction,
+			CancellationToken cancellationToken
 		)
 		{
-			var sampler = new IntervalSampler(500);
+			var sampler = new IntervalSampler(BatchFlushIntervalMilliseconds);
 			var pendingBatch = new List<ListedItem>();
 			var allAcceptedItems = new List<ListedItem>();
 			var count = 0;
-			var stoppedBeforeFindNext = false;
 
 			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
 			bool CalculateFolderSizes = userSettingsService.FoldersSettingsService.CalculateFolderSizes;
@@ -42,9 +48,7 @@ namespace Files.App.Utils.Storage
 
 			var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) && !string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
 
-			try
-			{
-				do
+			do
 				{
 					var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
 					var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
@@ -108,25 +112,19 @@ namespace Files.App.Utils.Storage
 
 					if (cancellationToken.IsCancellationRequested || count == countLimit)
 					{
-						stoppedBeforeFindNext = true;
 						break;
 					}
 
-					if (intermediateAction is not null && pendingBatch.Count > 0 && (count == 32 || sampler.CheckNow()))
+					if (intermediateAction is not null && pendingBatch.Count > 0 && (count == BatchSize || sampler.CheckNow()))
 					{
 						await intermediateAction(pendingBatch);
 
 						// clear the temporary list every time we do an intermediate action
 						pendingBatch.Clear();
 					}
-				} while (Win32PInvoke.FindNextFile(hFile, out findData));
+				} while (findHandle.MoveNext(out findData));
 
-				return allAcceptedItems;
-			}
-			finally
-			{
-				Win32PInvoke.FindClose(hFile);
-			}
+			return allAcceptedItems;
 		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
@@ -285,7 +283,6 @@ namespace Files.App.Utils.Storage
 			}
 
 			bool itemThumbnailImgVis = false;
-			bool itemEmptyImgVis = true;
 
 			if (cancellationToken.IsCancellationRequested)
 				return null;
