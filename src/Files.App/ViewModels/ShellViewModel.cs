@@ -6,8 +6,6 @@ using Files.Shared.Helpers;
 using LibGit2Sharp;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Navigation;
-using Files.App.Utils.Storage.Enumerators.Win32;
-using Files.App.Utils.Storage.Projections;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
@@ -46,7 +44,8 @@ namespace Files.App.ViewModels
 		private readonly AsyncManualResetEvent operationEvent;
 		private readonly AsyncManualResetEvent gitChangedEvent;
 		private readonly DispatcherQueue dispatcherQueue;
-		private readonly NavigationScopeFactory navigationScopeFactory = new();
+		private readonly IWin32NavigationExecutor win32NavigationExecutor =
+			new Win32NavigationExecutor(new NavigationScopeFactory(), new Win32GitStateResolver());
 		private readonly JsonElement defaultJson = JsonSerializer.SerializeToElement("{}");
 		private readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
@@ -2180,56 +2179,81 @@ namespace Files.App.ViewModels
 			}
 			else
 			{
-				using var openTimeoutCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-				using var openCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-					cancellationToken,
-					openTimeoutCancellation.Token);
-				var openResult = await navigationScopeFactory.TryCreateAsync(
-					new FolderReference("win32", path),
-					openCancellation.Token);
-				var initialMetadata = openResult.InitialMetadata;
-				var itemModifiedDate = initialMetadata?.ModifiedUtc?.LocalDateTime ?? DateTime.Now;
-				var itemCreatedDate = initialMetadata?.CreatedUtc?.LocalDateTime ?? DateTime.Now;
-				var isHidden = initialMetadata?.IsHidden ?? false;
-				var opacity = isHidden ? Constants.UI.DimItemOpacity : 1d;
-
-				var currentFolder = library ?? new ListedItem(null)
+				ListedItem? currentFolder = null;
+				void InitializeCurrentFolder(FolderItemMetadata? initialMetadata)
 				{
-					PrimaryItemAttribute = StorageItemTypes.Folder,
-					ItemPropertiesInitialized = true,
-					ItemNameRaw = rootFolder?.DisplayName ?? Path.GetFileName(path.TrimEnd('\\')),
-					ItemDateModifiedReal = itemModifiedDate,
-					ItemDateCreatedReal = itemCreatedDate,
-					ItemType = folderTypeTextLocalized,
-					FileImage = null,
-					IsHiddenItem = isHidden,
-					Opacity = opacity,
-					LoadFileIcon = false,
-					ItemPath = path,
-					FileSize = null,
-					FileSizeBytes = 0,
-				};
+					var itemModifiedDate = initialMetadata?.ModifiedUtc?.LocalDateTime ?? DateTime.Now;
+					var itemCreatedDate = initialMetadata?.CreatedUtc?.LocalDateTime ?? DateTime.Now;
+					var isHidden = initialMetadata?.IsHidden ?? false;
 
-				CurrentFolder = currentFolder;
+					currentFolder = library ?? new ListedItem(null)
+					{
+						PrimaryItemAttribute = StorageItemTypes.Folder,
+						ItemPropertiesInitialized = true,
+						ItemNameRaw = rootFolder?.DisplayName ?? Path.GetFileName(path.TrimEnd('\\')),
+						ItemDateModifiedReal = itemModifiedDate,
+						ItemDateCreatedReal = itemCreatedDate,
+						ItemType = folderTypeTextLocalized,
+						FileImage = null,
+						IsHiddenItem = isHidden,
+						Opacity = isHidden ? Constants.UI.DimItemOpacity : 1d,
+						LoadFileIcon = false,
+						ItemPath = path,
+						FileSize = null,
+						FileSizeBytes = 0,
+					};
 
-				if (openResult.Status == NavigationScopeOpenStatus.Canceled)
+					CurrentFolder = currentFolder;
+				}
+
+				FolderPublicationCoordinator<ListedItem>? publicationCoordinator = null;
+				publicationCoordinator = new FolderPublicationCoordinator<ListedItem>(
+					SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
+						folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
+					snapshot => PublishFolderSnapshotAsync(publicationCoordinator!, snapshot, cancellationToken));
+				folderPublicationCoordinator = publicationCoordinator;
+				void ClearPublicationCoordinator()
 				{
-					if (openTimeoutCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+					if (ReferenceEquals(folderPublicationCoordinator, publicationCoordinator))
+						folderPublicationCoordinator = null;
+				}
+
+				Win32NavigationExecutionResult executionResult;
+				try
+				{
+					executionResult = await win32NavigationExecutor.ExecuteAsync(
+						path,
+						publicationCoordinator,
+						InitializeCurrentFolder,
+						cancellationToken);
+				}
+				catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+				{
+					ClearPublicationCoordinator();
+					return -1;
+				}
+
+				if (executionResult.Status == Win32NavigationExecutionStatus.Canceled)
+				{
+					if (executionResult.OpenTimedOut)
 						ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged);
 
+					ClearPublicationCoordinator();
 					return -1;
 				}
-				else if (openResult.Status == NavigationScopeOpenStatus.Unavailable)
+				else if (executionResult.Status == Win32NavigationExecutionStatus.Unavailable)
 				{
-					ShowNavigationUnavailable(openResult.FailureReason ?? NavigationUnavailableReason.Unknown, path);
+					ShowNavigationUnavailable(executionResult.FailureReason ?? NavigationUnavailableReason.Unknown, path);
 
+					ClearPublicationCoordinator();
 					return -1;
 				}
-				else if (openResult.Status == NavigationScopeOpenStatus.Fallback)
+				else if (executionResult.Status == Win32NavigationExecutionStatus.Fallback)
 				{
+					ClearPublicationCoordinator();
 					await EnumFromStorageFolderAsync(path, rootFolder, currentStorageFolder, cancellationToken);
 
-					if (filesAndFolders.Count == 0 && openResult.FailureReason == NavigationUnavailableReason.AccessDenied)
+					if (filesAndFolders.Count == 0 && executionResult.FailureReason == NavigationUnavailableReason.AccessDenied)
 					{
 						ShowLocationInaccessibleOrMissing(path);
 
@@ -2238,82 +2262,55 @@ namespace Files.App.ViewModels
 
 					return 1;
 				}
-				else
+				else if (executionResult.Status == Win32NavigationExecutionStatus.Failed)
 				{
-					FolderPublicationCoordinator<ListedItem>? publicationCoordinator = null;
-					publicationCoordinator = new FolderPublicationCoordinator<ListedItem>(
-						SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
-							folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
-						snapshot => PublishFolderSnapshotAsync(publicationCoordinator!, snapshot, cancellationToken));
-					folderPublicationCoordinator = publicationCoordinator;
-
-					try
+					if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
 					{
-						await Task.Run(async () =>
-						{
-							var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) &&
-								!string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
-
-							// TODO: Keep the navigation scope alive until navigation replacement when change/enrichment sources become scope-owned.
-							await using var navigationScope = openResult.Scope!;
-							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(
-								navigationScope.EnumerationSource,
-								new FolderItemListedItemProjection(),
-								path,
-								isGitRepo);
-							await publicationCoordinator.EnumerateAsync(source, cancellationToken);
-
-							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
-								return;
-
-							// Not awaited here: with Low priority these don't run until the UI thread goes idle
-							// after the final list update, which would delay load completion and watcher setup.
-							// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.
-							_ = dispatcherQueue.EnqueueOrInvokeAsync(CheckForSolutionFile, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-							desktopIniUpdateTask = dispatcherQueue.EnqueueOrInvokeAsync(() =>
-							{
-								GetDesktopIniFileData();
-								CheckForBackgroundImage();
-								FilesAndFoldersFilter = null;
-							},
-							Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-						});
-
-						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
-							return -1;
-					}
-					catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
-					{
-						return -1;
-					}
-					catch (Win32Exception ex)
-					{
-						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
-							return -1;
-
-						if (ex.NativeErrorCode == (int)Windows.Win32.Foundation.WIN32_ERROR.ERROR_ACCESS_DENIED)
-							ShowLocationInaccessibleOrMissing(path);
-						else
-							ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged, ex.NativeErrorCode.ToString());
-
+						ClearPublicationCoordinator();
 						return -1;
 					}
 
-					rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
-					if (rootFolder is not null)
-					{
-						if (rootFolder.DisplayName is not null)
-							currentFolder.ItemNameRaw = rootFolder.DisplayName;
+					if (executionResult.FailureReason == NavigationUnavailableReason.AccessDenied)
+						ShowLocationInaccessibleOrMissing(path);
+					else
+						ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged, executionResult.FailureMessage);
 
-						if (!string.Equals(path, Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase))
-						{
-							var syncStatus = await CheckCloudDriveSyncStatusAsync(rootFolder);
-							currentFolder.SyncStatusUI = CloudDriveSyncStatusUI.FromCloudDriveSyncStatus(syncStatus);
-						}
-					}
-
-					return 0;
+					ClearPublicationCoordinator();
+					return -1;
 				}
+
+				if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+				{
+					ClearPublicationCoordinator();
+					return -1;
+				}
+
+				// Not awaited here: with Low priority these don't run until the UI thread goes idle
+				// after the final list update, which would delay load completion and watcher setup.
+				// The desktop.ini task is awaited before applying the adaptive layout, which reads DesktopIni.
+				_ = dispatcherQueue.EnqueueOrInvokeAsync(CheckForSolutionFile, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
+				desktopIniUpdateTask = dispatcherQueue.EnqueueOrInvokeAsync(() =>
+				{
+					GetDesktopIniFileData();
+					CheckForBackgroundImage();
+					FilesAndFoldersFilter = null;
+				},
+				Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
+
+				rootFolder ??= await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path));
+				if (rootFolder is not null)
+				{
+					if (rootFolder.DisplayName is not null)
+						currentFolder!.ItemNameRaw = rootFolder.DisplayName;
+
+					if (!string.Equals(path, Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase))
+					{
+						var syncStatus = await CheckCloudDriveSyncStatusAsync(rootFolder);
+						currentFolder!.SyncStatusUI = CloudDriveSyncStatusUI.FromCloudDriveSyncStatus(syncStatus);
+					}
+				}
+
+				return 0;
 			}
 		}
 

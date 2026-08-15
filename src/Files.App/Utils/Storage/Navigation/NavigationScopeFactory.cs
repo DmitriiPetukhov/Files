@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 namespace Files.App.Utils.Storage.Navigation;
 
 /// <summary>Composes the navigation-scoped components that are currently implemented.</summary>
-internal sealed class NavigationScopeFactory
+internal sealed class NavigationScopeFactory : INavigationScopeFactory
 {
 	private const string Win32ProviderId = "win32";
 
