@@ -2282,6 +2282,10 @@ namespace Files.App.ViewModels
 						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
 							return -1;
 					}
+					catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
+					{
+						return -1;
+					}
 					catch (Win32Exception ex)
 					{
 						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
