@@ -63,6 +63,8 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			new[] { "first.txt", "second.txt", "third" },
 			publishedBatches[0].Select(item => item.ItemNameRaw).ToArray());
 		Assert.AreEqual(1, handle.DisposeCount);
+		await source.DisposeAsync();
+		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
 	/// <summary>Ensures source failures propagate through the compatibility adapter.</summary>
@@ -81,9 +83,11 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 
 		Assert.AreSame(failure, exception);
 		Assert.AreEqual(1, handle.DisposeCount);
+		await source.DisposeAsync();
+		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
-	/// <summary>Ensures cancellation propagates and releases the source handle.</summary>
+	/// <summary>Ensures cancellation propagates while source lifetime remains scope-owned.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_PropagatesCancellation()
 	{
@@ -98,6 +102,8 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		await CaptureExceptionAsync<OperationCanceledException>(() =>
 			adapter.EnumerateAsync(_ => Task.CompletedTask, cancellationTokenSource.Token));
 
+		Assert.AreEqual(1, handle.DisposeCount);
+		await source.DisposeAsync();
 		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
