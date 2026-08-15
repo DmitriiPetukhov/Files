@@ -1,29 +1,27 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
-using System.ComponentModel;
-using System.IO;
 using Files.App.Helpers;
 using Files.App.Utils.Storage;
-using Files.App.Utils.Storage.Enumerators;
-using Microsoft.Extensions.Logging;
+using Files.App.Utils.Storage.Projections;
 using WIN32_FIND_DATA = Files.App.Helpers.Win32PInvoke.WIN32_FIND_DATA;
 
 namespace Files.App.Utils.Storage.Enumerators.Win32;
 
-/// <summary>Bridges the legacy ListedItem callback path while the UI projection is migrated.</summary>
+/// <summary>Projects the provider-neutral Win32 stream into the legacy ListedItem path.</summary>
 internal sealed class Win32ListedItemEnumerationAdapter(
-	string folderPath,
-	IntPtr handle,
-	WIN32_FIND_DATA firstFindData) : Files.App.Utils.Storage.IFolderEnumerationSource<ListedItem>
+	Win32FolderEnumerationSource source,
+	FolderItemListedItemProjection projection) : IFolderEnumerationSource<ListedItem>
 {
-	private const int NoCountLimit = -1;
-
-	private readonly string path = string.IsNullOrWhiteSpace(folderPath)
-		? throw new ArgumentException("A folder path is required.", nameof(folderPath))
-		: Path.GetFullPath(folderPath);
-	private readonly IWin32FindHandle findHandle = new Win32FindHandle(handle);
-	private int isDisposed;
+	public Win32ListedItemEnumerationAdapter(
+		string folderPath,
+		IntPtr handle,
+		WIN32_FIND_DATA firstFindData)
+		: this(
+			new Win32FolderEnumerationSource(folderPath, handle, firstFindData),
+			new FolderItemListedItemProjection())
+	{
+	}
 
 	/// <inheritdoc />
 	public async Task<IReadOnlyCollection<ListedItem>> EnumerateAsync(
@@ -31,48 +29,25 @@ internal sealed class Win32ListedItemEnumerationAdapter(
 		CancellationToken cancellationToken)
 	{
 		ArgumentNullException.ThrowIfNull(publishBatchAsync);
-		ThrowIfDisposed();
+		var allItems = new List<ListedItem>();
 
 		try
 		{
-			return await Win32StorageEnumerator.ListEntries(
-				path,
-				findHandle,
-				firstFindData,
-				NoCountLimit,
-				intermediateAction: publishBatchAsync,
-				cancellationToken: cancellationToken);
-		}
-		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-		{
-			throw;
-		}
-		catch (Exception ex)
-		{
-			App.Logger.LogWarning(
-				ex,
-				"Legacy Win32 folder enumeration failed. Path={Path} ErrorType={ErrorType} NativeErrorCode={NativeErrorCode}",
-				LogPathHelper.GetPathIdentifier(path),
-				ex.GetType().Name,
-				(ex as Win32Exception)?.NativeErrorCode);
-			throw;
+			await foreach (var batch in source.EnumerateAsync(cancellationToken))
+			{
+				var projectedItems = batch.Items
+					.Select(projection.Project)
+					.ToList();
+
+				allItems.AddRange(projectedItems);
+				await publishBatchAsync(projectedItems);
+			}
+
+			return allItems;
 		}
 		finally
 		{
-			DisposeFindHandle();
+			await source.DisposeAsync();
 		}
-	}
-
-	private void ThrowIfDisposed()
-	{
-		ObjectDisposedException.ThrowIf(
-			Volatile.Read(ref isDisposed) != 0,
-			typeof(Win32ListedItemEnumerationAdapter));
-	}
-
-	private void DisposeFindHandle()
-	{
-		if (Interlocked.Exchange(ref isDisposed, 1) == 0)
-			findHandle.Dispose();
 	}
 }
