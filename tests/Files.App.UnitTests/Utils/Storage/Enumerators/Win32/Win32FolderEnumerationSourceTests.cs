@@ -93,6 +93,24 @@ public sealed class Win32FolderEnumerationSourceTests
 		Assert.AreEqual(32, enumerator.Current.Items.Count);
 	}
 
+	/// <summary>Ensures cancellation after a full batch is observed before the next native read.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_StopsBeforeReadingNextEntryWhenCanceledAfterBatch()
+	{
+		var failure = new InvalidOperationException("next entry should not be requested after cancellation");
+		var remainingEntries = Enumerable.Range(1, 31).Select(index => CreateFindData($"item-{index:00}"));
+		var handle = new ScriptedWin32FindHandle(remainingEntries, failure);
+		using var cancellationTokenSource = new CancellationTokenSource();
+		await using var source = new Win32FolderEnumerationSource(FolderPath, handle, CreateFindData("item-00"));
+		await using var enumerator = source.EnumerateAsync(cancellationTokenSource.Token).GetAsyncEnumerator();
+
+		Assert.IsTrue(await enumerator.MoveNextAsync());
+		cancellationTokenSource.Cancel();
+
+		await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
+		Assert.AreEqual(1, handle.DisposeCount);
+	}
+
 	/// <summary>Ensures cancellation releases the enumeration handle.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_DisposesHandleWhenCanceled()
@@ -249,6 +267,7 @@ public sealed class Win32FolderEnumerationSourceTests
 			new Win32FolderEnumerationSource(null!, handle, CreateFindData("item")));
 
 		Assert.AreEqual("path", exception.ParamName);
+		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
 	/// <summary>Ensures a native handle is required.</summary>

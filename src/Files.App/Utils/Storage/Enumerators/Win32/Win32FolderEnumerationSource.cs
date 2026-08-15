@@ -30,7 +30,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	private int isHandleDisposed;
 
 	public Win32FolderEnumerationSource(string path, IntPtr handle, WIN32_FIND_DATA firstFindData)
-		: this(path, new Win32FindHandle(handle), firstFindData)
+		: this(NormalizePath(path), new Win32FindHandle(handle), firstFindData)
 	{
 	}
 
@@ -41,9 +41,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 		Func<string, (IWin32FindHandle Handle, WIN32_FIND_DATA FindData)?>? resolveLookup = null,
 		Func<string, WIN32_FIND_DATA, FolderItem?>? materialize = null)
 	{
-		this.path = string.IsNullOrWhiteSpace(path)
-			? throw new ArgumentException("A folder path is required.", nameof(path))
-			: Path.GetFullPath(path);
+		this.path = NormalizePathAndDisposeOnFailure(path, findHandle);
 		this.findHandle = findHandle ?? throw new ArgumentNullException(nameof(findHandle));
 		this.firstFindData = firstFindData;
 		this.resolveLookup = resolveLookup ?? OpenForResolution;
@@ -151,6 +149,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 					{
 						yield return new FolderEnumerationBatch<FolderItem>(pendingBatch, sequenceNumber++);
 						pendingBatch.Clear();
+						cancellationToken.ThrowIfCancellationRequested();
 					}
 				}
 
@@ -265,21 +264,30 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 
 	internal static Win32FolderEnumerationOpenResult Open(string path)
 	{
+		var normalizedPath = NormalizePath(path);
 		if (Win32FindHandle.TryOpen(
-			Path.Combine(path, "*.*"),
+			Path.Combine(normalizedPath, "*.*"),
 			out var findHandle,
 			out var firstFindData,
 			out var nativeErrorCode,
 			out var openStatus))
 		{
-			var source = new Win32FolderEnumerationSource(path, findHandle!, firstFindData);
-			var initialMetadata = CreateInitialMetadata(firstFindData);
+			try
+			{
+				var source = new Win32FolderEnumerationSource(normalizedPath, findHandle!, firstFindData);
+				var initialMetadata = CreateInitialMetadata(firstFindData);
 
-			return new Win32FolderEnumerationOpenResult(
-				Win32FolderEnumerationOpenStatus.Opened,
-				source,
-				initialMetadata,
-				nativeErrorCode);
+				return new Win32FolderEnumerationOpenResult(
+					Win32FolderEnumerationOpenStatus.Opened,
+					source,
+					initialMetadata,
+					nativeErrorCode);
+			}
+			catch
+			{
+				findHandle?.Dispose();
+				throw;
+			}
 		}
 
 		return new Win32FolderEnumerationOpenResult(
@@ -322,6 +330,29 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 		ObjectDisposedException.ThrowIf(
 			Volatile.Read(ref isDisposed) != 0,
 			typeof(Win32FolderEnumerationSource));
+	}
+
+	private static string NormalizePath(string path)
+	{
+		if (string.IsNullOrWhiteSpace(path))
+			throw new ArgumentException("A folder path is required.", nameof(path));
+
+		return Path.GetFullPath(path);
+	}
+
+	private static string NormalizePathAndDisposeOnFailure(
+		string path,
+		IWin32FindHandle? findHandle)
+	{
+		try
+		{
+			return NormalizePath(path);
+		}
+		catch
+		{
+			findHandle?.Dispose();
+			throw;
+		}
 	}
 
 	private void DisposeFindHandle()

@@ -1,6 +1,7 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using System.ComponentModel;
 using Files.App.Helpers;
 using Files.App.Utils.Storage;
 using Files.App.Utils.Storage.Contracts;
@@ -43,107 +44,182 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 		var pendingItems = new List<ListedItem>();
 		var pendingMainItemCount = 0;
 		var publicationSampler = new IntervalSampler(PublicationInterval);
+		var scratchItems = ListedItemArrayPool.Shared.Rent();
 		IUserSettingsService? userSettingsService = null;
 		IconWarmUpQueue? iconWarmUpQueue = null;
 		ISizeProvider? folderSizeProvider = null;
 
 		if (legacyRootPath is not null)
 		{
-			userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
-			iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
-			folderSizeProvider = Ioc.Default.GetRequiredService<ISizeProvider>();
-		}
-
-		await foreach (var batch in source.EnumerateAsync(cancellationToken))
-		{
-			foreach (var item in batch.Items)
+			try
 			{
-				cancellationToken.ThrowIfCancellationRequested();
-
-				var materialized = legacyRootPath is not null
-					? await MaterializeLegacyItemAsync(
-						item,
-						userSettingsService!,
-						iconWarmUpQueue!,
-						folderSizeProvider!,
-						cancellationToken)
-					: (Items: (IReadOnlyCollection<ListedItem>)new List<ListedItem> { projection.Project(item) }, AcceptedMainItemCount: 1);
-
-				if (materialized.Items.Count == 0)
-					continue;
-
-				allItems.AddRange(materialized.Items);
-				pendingItems.AddRange(materialized.Items);
-				pendingMainItemCount += materialized.AcceptedMainItemCount;
-
-				if (pendingMainItemCount >= MainItemsPerPublication || publicationSampler.CheckNow())
-				{
-					await publishBatchAsync(pendingItems.ToArray());
-					pendingItems.Clear();
-					pendingMainItemCount = 0;
-				}
+				userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+				iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
+				folderSizeProvider = Ioc.Default.GetRequiredService<ISizeProvider>();
+			}
+			catch
+			{
+				ListedItemArrayPool.Shared.Return(scratchItems);
+				throw;
 			}
 		}
 
-		if (pendingItems.Count > 0)
-			await publishBatchAsync(pendingItems.ToArray());
+		try
+		{
+			await foreach (var batch in source.EnumerateAsync(cancellationToken))
+			{
+				foreach (var item in batch.Items)
+				{
+					cancellationToken.ThrowIfCancellationRequested();
+					(ListedItem[] Buffer, int Count, int AcceptedMainItemCount) materialized;
+					if (legacyRootPath is null)
+					{
+						materialized = (scratchItems, 1, 1);
+					}
+					else
+					{
+						try
+						{
+							materialized = await MaterializeLegacyItemAsync(
+								item,
+								userSettingsService!,
+								iconWarmUpQueue!,
+								folderSizeProvider!,
+								scratchItems,
+								cancellationToken);
+						}
+						catch (Exception ex) when (ex is not OperationCanceledException)
+						{
+							LogLegacyMaterializationFailure(item, ex);
+							throw;
+						}
+					}
 
-		return allItems;
+					scratchItems = materialized.Buffer;
+					if (legacyRootPath is null)
+						scratchItems[0] = projection.Project(item);
+
+					if (materialized.Count == 0)
+						continue;
+
+					for (var index = 0; index < materialized.Count; index++)
+					{
+						allItems.Add(scratchItems[index]);
+						pendingItems.Add(scratchItems[index]);
+					}
+
+					pendingMainItemCount += materialized.AcceptedMainItemCount;
+
+					if (pendingMainItemCount >= MainItemsPerPublication || publicationSampler.CheckNow())
+					{
+						await publishBatchAsync(pendingItems.ToArray());
+						pendingItems.Clear();
+						pendingMainItemCount = 0;
+					}
+				}
+			}
+
+			if (pendingItems.Count > 0)
+				await publishBatchAsync(pendingItems.ToArray());
+
+			return allItems;
+		}
+		finally
+		{
+			ListedItemArrayPool.Shared.Return(scratchItems);
+		}
 	}
 
-	private async Task<(IReadOnlyCollection<ListedItem> Items, int AcceptedMainItemCount)> MaterializeLegacyItemAsync(
+	private async ValueTask<(ListedItem[] Buffer, int Count, int AcceptedMainItemCount)> MaterializeLegacyItemAsync(
 		FolderItem item,
 		IUserSettingsService userSettingsService,
 		IconWarmUpQueue iconWarmUpQueue,
 		ISizeProvider folderSizeProvider,
+		ListedItem[] buffer,
 		CancellationToken cancellationToken)
 	{
-		var foldersSettings = userSettingsService.FoldersSettingsService;
-		var materializedItems = new List<ListedItem>();
-
-		if (item.ProviderData is not Win32FolderItemData providerData)
+		var originalBuffer = buffer;
+		try
 		{
-			materializedItems.Add(projection.Project(item));
-			return (materializedItems, 1);
-		}
+			var foldersSettings = userSettingsService.FoldersSettingsService;
 
-		var findData = providerData.FindData;
-		var fileAttributes = (FileAttributes)findData.dwFileAttributes;
-		var isHidden = fileAttributes.HasFlag(FileAttributes.Hidden);
-		var isSystem = fileAttributes.HasFlag(FileAttributes.System);
-		var startsWithDot = findData.cFileName.StartsWith('.');
-		if ((isHidden && (!foldersSettings.ShowHiddenItems || isSystem && !foldersSettings.ShowProtectedSystemFiles)) ||
-			(startsWithDot && !foldersSettings.ShowDotFiles))
-			return (materializedItems, 0);
-
-		var isFolder = fileAttributes.HasFlag(FileAttributes.Directory);
-		var listedItem = isFolder
-			? await Win32StorageEnumerator.GetFolder(findData, legacyRootPath!, isGitRepo, cancellationToken)
-			: await Win32StorageEnumerator.GetFile(findData, legacyRootPath!, isGitRepo, cancellationToken);
-		if (listedItem is null)
-			return (materializedItems, 0);
-
-		materializedItems.Add(listedItem);
-		iconWarmUpQueue.TryQueue(listedItem, isFolder, cancellationToken);
-
-		if (foldersSettings.AreAlternateStreamsVisible)
-		{
-			materializedItems.AddRange(
-				Win32Helper.GetAlternateStreams(listedItem.ItemPath)
-					.Select(stream => Win32StorageEnumerator.GetAlternateStream(stream, listedItem)));
-		}
-
-		if (isFolder && foldersSettings.CalculateFolderSizes)
-		{
-			if (folderSizeProvider.TryGetSize(listedItem.ItemPath, out var size))
+			if (item.ProviderData is not Win32FolderItemData providerData)
 			{
-				listedItem.FileSizeBytes = (long)size;
-				listedItem.FileSize = size.ToSizeString();
+				buffer[0] = projection.Project(item);
+				return (buffer, 1, 1);
 			}
 
-			_ = folderSizeProvider.UpdateAsync(listedItem.ItemPath, cancellationToken);
-		}
+			var findData = providerData.FindData;
+			var fileAttributes = (FileAttributes)findData.dwFileAttributes;
+			var isHidden = fileAttributes.HasFlag(FileAttributes.Hidden);
+			var isSystem = fileAttributes.HasFlag(FileAttributes.System);
+			var startsWithDot = findData.cFileName.StartsWith('.');
+			if ((isHidden && (!foldersSettings.ShowHiddenItems || isSystem && !foldersSettings.ShowProtectedSystemFiles)) ||
+				(startsWithDot && !foldersSettings.ShowDotFiles))
+				return (buffer, 0, 0);
 
-		return (materializedItems, 1);
+			var isFolder = fileAttributes.HasFlag(FileAttributes.Directory);
+			var listedItem = isFolder
+				? await Win32StorageEnumerator.GetFolder(findData, legacyRootPath!, isGitRepo, cancellationToken)
+				: await Win32StorageEnumerator.GetFile(findData, legacyRootPath!, isGitRepo, cancellationToken);
+			if (listedItem is null)
+				return (buffer, 0, 0);
+
+			var itemCount = 1;
+			buffer[0] = listedItem;
+			iconWarmUpQueue.TryQueue(listedItem, isFolder, cancellationToken);
+
+			if (foldersSettings.AreAlternateStreamsVisible)
+			{
+				foreach (var stream in Win32Helper.GetAlternateStreams(listedItem.ItemPath))
+				{
+					buffer = EnsureCapacity(buffer, itemCount + 1, itemCount);
+					buffer[itemCount++] = Win32StorageEnumerator.GetAlternateStream(stream, listedItem);
+				}
+			}
+
+			if (isFolder && foldersSettings.CalculateFolderSizes)
+			{
+				if (folderSizeProvider.TryGetSize(listedItem.ItemPath, out var size))
+				{
+					listedItem.FileSizeBytes = (long)size;
+					listedItem.FileSize = size.ToSizeString();
+				}
+
+				_ = folderSizeProvider.UpdateAsync(listedItem.ItemPath, cancellationToken);
+			}
+
+			if (!ReferenceEquals(buffer, originalBuffer))
+				ListedItemArrayPool.Shared.Return(originalBuffer);
+
+			return (buffer, itemCount, 1);
+		}
+		catch
+		{
+			if (!ReferenceEquals(buffer, originalBuffer))
+				ListedItemArrayPool.Shared.Return(buffer);
+
+			throw;
+		}
+	}
+
+	private static ListedItem[] EnsureCapacity(ListedItem[] buffer, int requiredCapacity, int itemCount)
+	{
+		if (buffer.Length >= requiredCapacity)
+			return buffer;
+
+		var expandedBuffer = new ListedItem[Math.Max(requiredCapacity, buffer.Length * 2)];
+		Array.Copy(buffer, expandedBuffer, itemCount);
+		return expandedBuffer;
+	}
+
+	private static void LogLegacyMaterializationFailure(FolderItem item, Exception exception)
+	{
+		App.Logger.LogWarning(
+			exception,
+			"Win32 legacy item materialization failed. Path={Path} ErrorType={ErrorType} NativeErrorCode={NativeErrorCode}",
+			LogPathHelper.GetPathIdentifier(item.Key.OpaqueId),
+			exception.GetType().Name,
+			(exception as Win32Exception)?.NativeErrorCode);
 	}
 }
