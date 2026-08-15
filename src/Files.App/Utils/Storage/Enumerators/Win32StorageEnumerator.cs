@@ -297,7 +297,7 @@ namespace Files.App.Utils.Storage
 					};
 				}
 			}
-			else if (App.LibraryManager.TryGetLibrary(itemPath, out LibraryLocationItem library))
+			else if (App.LibraryManager is not null && App.LibraryManager.TryGetLibrary(itemPath, out LibraryLocationItem library))
 			{
 				return new LibraryItem(library)
 				{

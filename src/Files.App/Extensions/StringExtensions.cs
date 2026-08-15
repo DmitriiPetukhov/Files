@@ -4,6 +4,7 @@
 using Microsoft.Windows.ApplicationModel.Resources;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Runtime.InteropServices;
 using ByteSize = ByteSizeLib.ByteSize;
 
 namespace Files.App.Extensions
@@ -55,7 +56,7 @@ namespace Files.App.Extensions
 			return result;
 		}
 
-		private static readonly ResourceMap resourcesTree = new ResourceManager().MainResourceMap.TryGetSubtree("Resources");
+		private static readonly ResourceMap? resourcesTree = TryGetResourcesTree();
 
 		private static readonly ConcurrentDictionary<string, string> cachedResources = new();
 
@@ -105,6 +106,18 @@ namespace Files.App.Extensions
 			value = resourcesTree?.TryGetValue(resourceKey)?.ValueAsString;
 
 			return cachedResources[resourceKey] = value ?? string.Empty;
+		}
+
+		private static ResourceMap? TryGetResourcesTree()
+		{
+			try
+			{
+				return new ResourceManager().MainResourceMap.TryGetSubtree("Resources");
+			}
+			catch (COMException)
+			{
+				return null;
+			}
 		}
 	}
 }
