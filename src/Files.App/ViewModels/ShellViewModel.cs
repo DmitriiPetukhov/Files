@@ -4,6 +4,7 @@
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using LibGit2Sharp;
+using Files.App.Utils.Storage.Enumerators.Win32;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
@@ -2271,8 +2272,6 @@ namespace Files.App.ViewModels
 					{
 						if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
 							return -1;
-
-						App.Logger.LogWarning(ex, "Native folder enumeration failed for {Path} with Win32 error {ErrorCode}.", LogPathHelper.GetPathIdentifier(path), ex.NativeErrorCode);
 
 						if (ex.NativeErrorCode == (int)Windows.Win32.Foundation.WIN32_ERROR.ERROR_ACCESS_DENIED)
 							ShowLocationInaccessibleOrMissing(path);
