@@ -5,11 +5,13 @@ using System.Threading;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Files.App.UnitTests;
+namespace Files.App.UnitTests.Utils.Storage.Enumerators;
 
+/// <summary>Verifies publication session state transitions.</summary>
 [TestClass]
 public sealed class FolderPublicationSessionTests
 {
+	/// <summary>Ensures appended items produce an ordered accumulated snapshot.</summary>
 	[TestMethod]
 	public void TryAppend_ReturnsOrderedAccumulatedSnapshot()
 	{
@@ -22,6 +24,7 @@ public sealed class FolderPublicationSessionTests
 		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, secondSnapshot!.ToArray());
 	}
 
+	/// <summary>Ensures the final result replaces the published state.</summary>
 	[TestMethod]
 	public void TryReplaceFinal_ReplacesPreviouslyPublishedState()
 	{
@@ -33,6 +36,7 @@ public sealed class FolderPublicationSessionTests
 		CollectionAssert.AreEqual(new[] { "c", "d" }, snapshot!.ToArray());
 	}
 
+	/// <summary>Ensures canceled sessions reject appended items.</summary>
 	[TestMethod]
 	public void TryAppend_RejectsCanceledSession()
 	{
@@ -43,6 +47,7 @@ public sealed class FolderPublicationSessionTests
 		Assert.IsNull(snapshot);
 	}
 
+	/// <summary>Ensures later batches do not change an earlier snapshot.</summary>
 	[TestMethod]
 	public void TryAppend_PreservesSnapshotAfterLaterBatch()
 	{
@@ -54,6 +59,7 @@ public sealed class FolderPublicationSessionTests
 		CollectionAssert.AreEqual(new[] { "a", "b" }, firstSnapshot!.ToArray());
 	}
 
+	/// <summary>Ensures equal sort values retain item order.</summary>
 	[TestMethod]
 	public void TryAppend_PreservesItemsWithEqualSortValues()
 	{
@@ -66,6 +72,7 @@ public sealed class FolderPublicationSessionTests
 		CollectionAssert.AreEqual(new[] { first, second }, snapshot!.ToArray());
 	}
 
+	/// <summary>Ensures rebuilding reorders canonical items without replacing the session.</summary>
 	[TestMethod]
 	public void TryRebuildIndex_ReordersCanonicalItemsWithoutReplacingSession()
 	{
@@ -79,8 +86,10 @@ public sealed class FolderPublicationSessionTests
 		CollectionAssert.AreEqual(new[] { "d", "c", "b", "a" }, afterAppend!.ToArray());
 	}
 
+	/// <summary>Provides items with equal sort values for stability checks.</summary>
 	private sealed record TestItem(string Key, int Id);
 
+	/// <summary>Sorts test items by their key.</summary>
 	private sealed class TestItemComparer : Comparer<TestItem>
 	{
 		public override int Compare(TestItem? x, TestItem? y)

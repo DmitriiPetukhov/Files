@@ -4,11 +4,13 @@ using System.Threading.Tasks;
 using Files.App.Utils.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Files.App.UnitTests;
+namespace Files.App.UnitTests.Utils.Storage.Enumerators;
 
+/// <summary>Verifies serialized publication operations.</summary>
 [TestClass]
 public sealed class FolderPublicationOperationGateTests
 {
+	/// <summary>Ensures concurrent operations execute one at a time.</summary>
 	[TestMethod]
 	public async Task ExecuteAsync_SerializesPublicationOperations()
 	{
