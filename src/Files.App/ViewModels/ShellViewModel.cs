@@ -2251,13 +2251,16 @@ namespace Files.App.ViewModels
 					{
 						await Task.Run(async () =>
 						{
+							var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) &&
+								!string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
+
 							// TODO: Keep the navigation scope alive until navigation replacement when change/enrichment sources become scope-owned.
 							await using var navigationScope = openResult.Scope!;
 							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(
 								navigationScope.EnumerationSource,
 								new FolderItemListedItemProjection(),
 								path,
-								IsValidGitDirectory);
+								isGitRepo);
 							await publicationCoordinator.EnumerateAsync(source, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
