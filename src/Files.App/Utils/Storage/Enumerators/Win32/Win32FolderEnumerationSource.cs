@@ -82,23 +82,38 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	}
 
 	/// <inheritdoc />
-	public ValueTask<FolderItem?> ResolveAsync(FolderItemKey itemKey, CancellationToken cancellationToken = default)
+	public async ValueTask<FolderItem?> ResolveAsync(FolderItemKey itemKey, CancellationToken cancellationToken = default)
 	{
 		ThrowIfDisposed();
 		cancellationToken.ThrowIfCancellationRequested();
 
 		var itemPath = ValidateItemKey(itemKey);
+		var lookupTask = Task.Run(() => resolveLookup(itemPath));
+		var lookupCompleted = false;
 		try
 		{
-			var lookup = resolveLookup(itemPath);
+			var lookup = await lookupTask.WaitAsync(cancellationToken);
+			lookupCompleted = true;
+			if (cancellationToken.IsCancellationRequested)
+			{
+				DisposeResolutionLookup(lookup);
+				throw new OperationCanceledException(cancellationToken);
+			}
+
 			if (lookup is null)
-				return ValueTask.FromResult<FolderItem?>(null);
+				return null;
 
 			using (lookup.Value.Handle)
 			{
 				var parentPath = Path.GetDirectoryName(itemPath) ?? path;
-				return ValueTask.FromResult(materialize(parentPath, lookup.Value.FindData));
+				return materialize(parentPath, lookup.Value.FindData);
 			}
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			if (!lookupCompleted)
+				_ = ObserveLateResolutionAsync(itemPath, lookupTask);
+			throw;
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
@@ -208,6 +223,30 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 			return null;
 
 		throw new Win32Exception(nativeErrorCode);
+	}
+
+	private async Task ObserveLateResolutionAsync(
+		string itemPath,
+		Task<(IWin32FindHandle Handle, WIN32_FIND_DATA FindData)?> lookupTask)
+	{
+		try
+		{
+			DisposeResolutionLookup(await lookupTask);
+		}
+		catch (OperationCanceledException)
+		{
+		}
+		catch (Exception ex)
+		{
+			LogFailure(itemPath, ex);
+		}
+	}
+
+	private static void DisposeResolutionLookup(
+		(IWin32FindHandle Handle, WIN32_FIND_DATA FindData)? lookup)
+	{
+		if (lookup is { } resolvedLookup)
+			resolvedLookup.Handle.Dispose();
 	}
 
 	private string ValidateItemKey(FolderItemKey itemKey)

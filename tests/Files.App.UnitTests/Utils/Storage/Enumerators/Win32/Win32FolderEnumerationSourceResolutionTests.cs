@@ -172,6 +172,43 @@ public sealed class Win32FolderEnumerationSourceResolutionTests
 		Assert.AreEqual(0, lookupCalls);
 	}
 
+	/// <summary>Ensures cancellation returns before a blocked lookup completes and disposes its late handle.</summary>
+	[TestMethod]
+	public async Task ResolveAsync_ReturnsCanceledBeforeLookupCompletesAndDisposesLateHandle()
+	{
+		var lookupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		var releaseLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		var enumerationHandle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		var resolutionHandle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		await using var source = new Win32FolderEnumerationSource(
+			FolderPath,
+			enumerationHandle,
+			CreateFindData("item"),
+			_ =>
+			{
+				lookupStarted.SetResult();
+				releaseLookup.Task.GetAwaiter().GetResult();
+				return (resolutionHandle, CreateFindData("item"));
+			});
+		using var cancellationTokenSource = new CancellationTokenSource();
+
+		var resolveTask = Task.Run(() => source.ResolveAsync(
+			new FolderItemKey("win32", Path.Combine(FolderPath, "item")),
+			cancellationTokenSource.Token).AsTask());
+		await lookupStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+		cancellationTokenSource.Cancel();
+		await CaptureExceptionAsync<OperationCanceledException>(() => resolveTask);
+
+		Assert.AreEqual(0, resolutionHandle.DisposeCount);
+		releaseLookup.SetResult();
+
+		for (var attempt = 0; attempt < 100 && resolutionHandle.DisposeCount == 0; attempt++)
+			await Task.Delay(10);
+
+		Assert.AreEqual(1, resolutionHandle.DisposeCount);
+	}
+
 	/// <summary>Ensures provider-native resolution failures propagate unchanged.</summary>
 	[TestMethod]
 	public async Task ResolveAsync_PropagatesNativeFailure()
