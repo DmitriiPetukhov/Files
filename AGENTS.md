@@ -86,6 +86,8 @@ We currently don't have a suitable set of tests for AI agents. Just make sure th
 
 ## Commit & Push
 
+After all changes and before every commit, run the affected build with warnings visible (not `-clp:ErrorsOnly`) and run `dotnet format analyzers` for the affected project; fix diagnostics in changed code.
+
 When asked to commit, run these commands beforehand:
 
 ```powershell
