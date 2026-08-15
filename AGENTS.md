@@ -4,6 +4,7 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 
 - Protect context usage. Any command with unknown or potentially large output must be capped. Prefer targeted commands such as `rg`, `Get-Content -TotalCount`, `Select-Object -First`, or focused `git diff -- <path>`; for example, `COMMAND 2>&1 | Select-Object -First 200`. If a line cap is still too noisy, narrow the query instead of dumping full output.
 - Always follow `.editorconfig`
+- In potentially large loops, reuse typed array pools instead of allocating arrays or temporary collections per iteration; preseed a reasonable capacity, return rented buffers in `finally`, clear references before reuse, and provide a bounded fallback for capacity overruns to limit GC pressure.
 - Keep changed text files in CRLF line endings
 - Keep comments concise and useful. Do not add comments that restate obvious code.
 - Add brief XML documentation to classes, interfaces, methods, and other important elements. State their purpose without describing implementation details; one or two lines is usually enough.
