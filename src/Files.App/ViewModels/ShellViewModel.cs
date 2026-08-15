@@ -16,7 +16,6 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Vanara.Windows.Shell;
 using Windows.Foundation;
 using Windows.Storage;
@@ -391,6 +390,24 @@ namespace Files.App.ViewModels
 				ShowLocationUnavailable(LocationUnavailableKind.NotFound);
 				WatchForLocationRestoration(path);
 			}
+		}
+
+		private void ShowNavigationUnavailable(NavigationUnavailableReason reason, string path)
+		{
+			if (reason is NavigationUnavailableReason.AccessDenied or NavigationUnavailableReason.NotFound)
+			{
+				ShowLocationInaccessibleOrMissing(path);
+				return;
+			}
+
+			var locationUnavailableKind = reason switch
+			{
+				NavigationUnavailableReason.DriveUnplugged => LocationUnavailableKind.DriveUnplugged,
+				NavigationUnavailableReason.PasswordRequired => LocationUnavailableKind.PasswordRequired,
+				_ => LocationUnavailableKind.DriveUnplugged,
+			};
+
+			ShowLocationUnavailable(locationUnavailableKind);
 		}
 
 		private FileSystemWatcher? locationRestorationWatcher;
@@ -2163,39 +2180,17 @@ namespace Files.App.ViewModels
 			}
 			else
 			{
-				(IntPtr hFile, WIN32_FIND_DATA findData, int errorCode) = await Task.Run(() =>
-				{
-					var findInfoLevel = FINDEX_INFO_LEVELS.FindExInfoBasic;
-					var additionalFlags = FIND_FIRST_EX_LARGE_FETCH;
-
-					IntPtr hFileTsk = FindFirstFileExFromApp(
-						path + "\\*.*",
-						findInfoLevel,
-						out WIN32_FIND_DATA findDataTsk,
-						FINDEX_SEARCH_OPS.FindExSearchNameMatch,
-						IntPtr.Zero,
-						additionalFlags);
-
-					return (hFileTsk, findDataTsk, hFileTsk.ToInt64() == -1 ? Marshal.GetLastWin32Error() : 0);
-				})
-				.WithTimeoutAsync(TimeSpan.FromSeconds(5));
-
-				var itemModifiedDate = DateTime.Now;
-				var itemCreatedDate = DateTime.Now;
-
-				try
-				{
-					FileTimeToSystemTime(ref findData.ftLastWriteTime, out var systemModifiedTimeOutput);
-					itemModifiedDate = systemModifiedTimeOutput.ToDateTime();
-
-					FileTimeToSystemTime(ref findData.ftCreationTime, out SYSTEMTIME systemCreatedTimeOutput);
-					itemCreatedDate = systemCreatedTimeOutput.ToDateTime();
-				}
-				catch (ArgumentException)
-				{
-				}
-
-				var isHidden = (((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden);
+				using var openTimeoutCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+				using var openCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+					cancellationToken,
+					openTimeoutCancellation.Token);
+				var openResult = await navigationScopeFactory.TryCreateAsync(
+					new FolderReference("win32", path),
+					openCancellation.Token);
+				var initialMetadata = openResult.InitialMetadata;
+				var itemModifiedDate = initialMetadata?.ModifiedUtc?.LocalDateTime ?? DateTime.Now;
+				var itemCreatedDate = initialMetadata?.CreatedUtc?.LocalDateTime ?? DateTime.Now;
+				var isHidden = initialMetadata?.IsHidden ?? false;
 				var opacity = isHidden ? Constants.UI.DimItemOpacity : 1d;
 
 				var currentFolder = library ?? new ListedItem(null)
@@ -2217,18 +2212,24 @@ namespace Files.App.ViewModels
 
 				CurrentFolder = currentFolder;
 
-				if (hFile == IntPtr.Zero)
+				if (openResult.Status == NavigationScopeOpenStatus.Canceled)
 				{
-					ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged);
+					if (openTimeoutCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+						ShowLocationUnavailable(LocationUnavailableKind.DriveUnplugged);
 
 					return -1;
 				}
-				else if (hFile.ToInt64() == -1)
+				else if (openResult.Status == NavigationScopeOpenStatus.Unavailable)
+				{
+					ShowNavigationUnavailable(openResult.FailureReason ?? NavigationUnavailableReason.Unknown, path);
+
+					return -1;
+				}
+				else if (openResult.Status == NavigationScopeOpenStatus.Fallback)
 				{
 					await EnumFromStorageFolderAsync(path, rootFolder, currentStorageFolder, cancellationToken);
 
-					// errorCode == ERROR_ACCESS_DENIED
-					if (filesAndFolders.Count == 0 && errorCode == 0x5)
+					if (filesAndFolders.Count == 0 && openResult.FailureReason == NavigationUnavailableReason.AccessDenied)
 					{
 						ShowLocationInaccessibleOrMissing(path);
 
@@ -2250,13 +2251,13 @@ namespace Files.App.ViewModels
 					{
 						await Task.Run(async () =>
 						{
-							await using var navigationScope = navigationScopeFactory.Create(
-								new FolderReference("win32", path),
-								hFile,
-								findData);
+							// TODO: Keep the navigation scope alive until navigation replacement when change/enrichment sources become scope-owned.
+							await using var navigationScope = openResult.Scope!;
 							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(
 								navigationScope.EnumerationSource,
-								new FolderItemListedItemProjection());
+								new FolderItemListedItemProjection(),
+								path,
+								IsValidGitDirectory);
 							await publicationCoordinator.EnumerateAsync(source, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
-using Files.App.Helpers;
 using Files.App.UnitTests.TestHelpers;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Enumerators;
@@ -30,19 +30,22 @@ public sealed class NavigationScopeFactoryTests
 	public void CleanupTemporaryDirectory()
 		=> temporaryDirectory.Dispose();
 
-	/// <summary>Ensures the initial graph creates a scope with the bound Win32 enumeration source.</summary>
+	/// <summary>Ensures the universal factory result exposes an opened navigation scope.</summary>
 	[TestMethod]
-	public async Task Create_ContainsWin32SourceForWin32Folder()
+	public async Task TryCreateAsync_ReturnsOpenedScopeForWin32Folder()
 	{
 		File.WriteAllText(Path.Combine(FolderPath, "item.txt"), "item");
-		var handle = OpenSearchHandle(FolderPath, out var firstFindData);
 		var factory = new NavigationScopeFactory();
 
-		await using var scope = factory.Create(
+		var result = await factory.TryCreateAsync(
 			new FolderReference("win32", FolderPath),
-			handle,
-			firstFindData);
+			CancellationToken.None);
 
+		Assert.AreEqual(NavigationScopeOpenStatus.Opened, result.Status);
+		Assert.IsNotNull(result.Scope);
+		Assert.IsNotNull(result.InitialMetadata);
+
+		await using var scope = result.Scope;
 		var batches = new List<FolderEnumerationBatch<FolderItem>>();
 		await foreach (var batch in scope.EnumerationSource.EnumerateAsync())
 			batches.Add(batch);
@@ -53,57 +56,67 @@ public sealed class NavigationScopeFactoryTests
 
 	/// <summary>Ensures unsupported providers are rejected before scope creation.</summary>
 	[TestMethod]
-	public void Create_RejectsUnsupportedProvider()
+	public async Task TryCreateAsync_RejectsUnsupportedProvider()
 	{
 		var factory = new NavigationScopeFactory();
 
-		var exception = CaptureException<ArgumentException>(() =>
-			factory.Create(
+		var exception = await CaptureExceptionAsync<ArgumentException>(() =>
+			factory.TryCreateAsync(
 				new FolderReference("ftp", FolderPath),
-				IntPtr.Zero,
-				new Win32PInvoke.WIN32_FIND_DATA()));
+				CancellationToken.None));
 
 		Assert.AreEqual("folder", exception.ParamName);
 	}
 
 	/// <summary>Ensures a missing folder reference is rejected before scope creation.</summary>
 	[TestMethod]
-	public void Create_RejectsMissingFolder()
+	public async Task TryCreateAsync_RejectsMissingFolder()
 	{
 		var factory = new NavigationScopeFactory();
 
-		var exception = CaptureException<ArgumentNullException>(() =>
-			factory.Create(
-				null!,
-				IntPtr.Zero,
-				new Win32PInvoke.WIN32_FIND_DATA()));
+		var exception = await CaptureExceptionAsync<ArgumentNullException>(() =>
+			factory.TryCreateAsync(null!, CancellationToken.None));
 
 		Assert.AreEqual("folder", exception.ParamName);
 	}
 
-	private static IntPtr OpenSearchHandle(
-		string folderPath,
-		out Win32PInvoke.WIN32_FIND_DATA firstFindData)
+	/// <summary>Ensures a missing provider folder requests the universal fallback outcome.</summary>
+	[TestMethod]
+	public async Task TryCreateAsync_ReturnsFallbackForMissingWin32Folder()
 	{
-		var handle = Win32PInvoke.FindFirstFileExFromApp(
-			Path.Combine(folderPath, "*.*"),
-			Win32PInvoke.FINDEX_INFO_LEVELS.FindExInfoBasic,
-			out firstFindData,
-			Win32PInvoke.FINDEX_SEARCH_OPS.FindExSearchNameMatch,
-			IntPtr.Zero,
-			Win32PInvoke.FIND_FIRST_EX_LARGE_FETCH);
+		var factory = new NavigationScopeFactory();
 
-		Assert.AreNotEqual(IntPtr.Zero, handle);
-		Assert.AreNotEqual(Win32PInvoke.INVALID_HANDLE_VALUE, handle);
-		return handle;
+		var result = await factory.TryCreateAsync(
+			new FolderReference("win32", Path.Combine(FolderPath, "missing")),
+			CancellationToken.None);
+
+		Assert.AreEqual(NavigationScopeOpenStatus.Fallback, result.Status);
+		Assert.IsNull(result.Scope);
+		Assert.AreEqual(NavigationUnavailableReason.NotFound, result.FailureReason);
 	}
 
-	private static TException CaptureException<TException>(Action action)
+	/// <summary>Ensures cancellation produces a universal silent-cancellation outcome.</summary>
+	[TestMethod]
+	public async Task TryCreateAsync_ReturnsCanceledWhenCanceledBeforeOpen()
+	{
+		using var cancellationTokenSource = new CancellationTokenSource();
+		cancellationTokenSource.Cancel();
+		var factory = new NavigationScopeFactory();
+
+		var result = await factory.TryCreateAsync(
+			new FolderReference("win32", FolderPath),
+			cancellationTokenSource.Token);
+
+		Assert.AreEqual(NavigationScopeOpenStatus.Canceled, result.Status);
+		Assert.IsNull(result.Scope);
+	}
+
+	private static async Task<TException> CaptureExceptionAsync<TException>(Func<Task> action)
 		where TException : Exception
 	{
 		try
 		{
-			action();
+			await action();
 		}
 		catch (TException exception)
 		{
