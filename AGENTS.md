@@ -6,6 +6,7 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 - Always follow `.editorconfig`
 - Keep changed text files in CRLF line endings
 - Keep comments concise and useful. Do not add comments that restate obvious code.
+- Add brief XML documentation to classes, interfaces, methods, and other important elements. State their purpose without describing implementation details; one or two lines is usually enough.
 - Never read entire generated files in `bin` or `obj` unless the generated source is directly needed.
 - Prefer targeted search over full file reads.
 - Touch only what you must. Clean up only files you created or changed for the task.
