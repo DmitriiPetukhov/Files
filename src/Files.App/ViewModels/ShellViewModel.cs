@@ -4,7 +4,10 @@
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
 using LibGit2Sharp;
+using Files.App.Utils.Storage.Contracts;
+using Files.App.Utils.Storage.Navigation;
 using Files.App.Utils.Storage.Enumerators.Win32;
+using Files.App.Utils.Storage.Projections;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
@@ -44,6 +47,7 @@ namespace Files.App.ViewModels
 		private readonly AsyncManualResetEvent operationEvent;
 		private readonly AsyncManualResetEvent gitChangedEvent;
 		private readonly DispatcherQueue dispatcherQueue;
+		private readonly NavigationScopeFactory navigationScopeFactory = new();
 		private readonly JsonElement defaultJson = JsonSerializer.SerializeToElement("{}");
 		private readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
@@ -2246,7 +2250,13 @@ namespace Files.App.ViewModels
 					{
 						await Task.Run(async () =>
 						{
-							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(path, hFile, findData);
+							await using var navigationScope = navigationScopeFactory.Create(
+								new FolderReference("win32", path),
+								hFile,
+								findData);
+							IFolderEnumerationSource<ListedItem> source = new Win32ListedItemEnumerationAdapter(
+								navigationScope.EnumerationSource,
+								new FolderItemListedItemProjection());
 							await publicationCoordinator.EnumerateAsync(source, cancellationToken);
 
 							if (cancellationToken.IsCancellationRequested || IsLoadingCancelled)
