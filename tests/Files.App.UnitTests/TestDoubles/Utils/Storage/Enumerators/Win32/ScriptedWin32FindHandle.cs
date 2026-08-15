@@ -8,7 +8,8 @@ namespace Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators.Win32;
 /// <summary>Provides deterministic Win32 find results for source tests.</summary>
 internal sealed partial class ScriptedWin32FindHandle(
 	IEnumerable<Win32PInvoke.WIN32_FIND_DATA> entries,
-	Exception? moveNextException = null) : IWin32FindHandle
+	Exception? moveNextException = null,
+	Action? onDispose = null) : IWin32FindHandle
 {
 	private readonly Queue<Win32PInvoke.WIN32_FIND_DATA> entryQueue = new(entries);
 
@@ -32,5 +33,9 @@ internal sealed partial class ScriptedWin32FindHandle(
 	}
 
 	/// <summary>Records disposal of the scripted native handle.</summary>
-	public void Dispose() => DisposeCount++;
+	public void Dispose()
+	{
+		DisposeCount++;
+		onDispose?.Invoke();
+	}
 }

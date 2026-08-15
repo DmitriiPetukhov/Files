@@ -18,6 +18,8 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 {
 	private const string ProviderId = "win32";
 	private const int BatchSize = 32;
+	private static readonly Win32FolderOpenOperation openOperation =
+		new(new Win32FolderOpener(), LogFailure);
 
 	private readonly string path;
 	private readonly IWin32FindHandle findHandle;
@@ -53,7 +55,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-		var openResult = Open(path, CancellationToken.None);
+		var openResult = Open(path);
 		if (openResult.Source is null)
 		{
 			var exception = new Win32Exception(openResult.NativeErrorCode);
@@ -65,30 +67,10 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	}
 
 	/// <summary>Opens a Win32 folder source while keeping handle ownership at the source boundary.</summary>
-	internal static async Task<Win32FolderEnumerationOpenResult> TryOpenAsync(
+	internal static Task<Win32FolderEnumerationOpenResult> TryOpenAsync(
 		string path,
 		CancellationToken cancellationToken)
-	{
-		ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-		try
-		{
-			var openResult = await Task.Run(() => Open(path, cancellationToken), cancellationToken);
-			if (cancellationToken.IsCancellationRequested)
-			{
-				if (openResult.Source is not null)
-					await openResult.Source.DisposeAsync();
-
-				return CanceledResult();
-			}
-
-			return openResult;
-		}
-		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-		{
-			return CanceledResult();
-		}
-	}
+		=> openOperation.TryOpenAsync(path, cancellationToken);
 
 	/// <inheritdoc />
 	public IAsyncEnumerable<FolderEnumerationBatch<FolderItem>> EnumerateAsync(
@@ -242,10 +224,8 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 		return itemPath;
 	}
 
-	private static Win32FolderEnumerationOpenResult Open(string path, CancellationToken cancellationToken)
+	internal static Win32FolderEnumerationOpenResult Open(string path)
 	{
-		cancellationToken.ThrowIfCancellationRequested();
-
 		if (Win32FindHandle.TryOpen(
 			Path.Combine(path, "*.*"),
 			out var findHandle,
@@ -255,11 +235,6 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 		{
 			var source = new Win32FolderEnumerationSource(path, findHandle!, firstFindData);
 			var initialMetadata = CreateInitialMetadata(firstFindData);
-			if (cancellationToken.IsCancellationRequested)
-			{
-				source.DisposeAsync().GetAwaiter().GetResult();
-				cancellationToken.ThrowIfCancellationRequested();
-			}
 
 			return new Win32FolderEnumerationOpenResult(
 				Win32FolderEnumerationOpenStatus.Opened,
@@ -267,8 +242,6 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 				initialMetadata,
 				nativeErrorCode);
 		}
-
-		cancellationToken.ThrowIfCancellationRequested();
 
 		return new Win32FolderEnumerationOpenResult(
 			openStatus switch
@@ -281,13 +254,6 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 			null,
 			nativeErrorCode);
 	}
-
-	private static Win32FolderEnumerationOpenResult CanceledResult()
-		=> new(
-			Win32FolderEnumerationOpenStatus.Canceled,
-			null,
-			default,
-			0);
 
 	private static FolderItemMetadata CreateInitialMetadata(WIN32_FIND_DATA findData)
 		=> new(
