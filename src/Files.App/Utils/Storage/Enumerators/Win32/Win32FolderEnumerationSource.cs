@@ -30,7 +30,7 @@ internal sealed class Win32FolderEnumerationSource : IFolderEnumerationSource
 	private int isHandleDisposed;
 
 	public Win32FolderEnumerationSource(string path, IntPtr handle, WIN32_FIND_DATA firstFindData)
-		: this(NormalizePath(path), new Win32FindHandle(handle), firstFindData)
+		: this(path, new Win32FindHandle(handle), firstFindData)
 	{
 	}
 
