@@ -4,13 +4,10 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using CommunityToolkit.Mvvm.DependencyInjection;
 using Files.App.Data.Contracts;
 using Files.App.Data.Items;
 using Files.App.Helpers;
 using Files.App.Services;
-using Files.App.Services.DateTimeFormatter;
-using Files.App.Services.SizeProvider;
 using Files.App.UnitTests.TestDoubles.Services;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators.Win32;
@@ -18,9 +15,7 @@ using Files.App.UnitTests.TestHelpers;
 using Files.App.Utils;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Enumerators.Win32;
-using Files.App.Utils.Storage;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Projections;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -194,17 +189,10 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		File.WriteAllText(filePath, "visible content");
 		Directory.CreateDirectory(folderPath);
 		File.WriteAllText(filePath + ":metadata", "alternate stream");
-		using var serviceProvider = new ServiceCollection()
-			.AddSingleton<IUserSettingsService>(settings)
-			.AddSingleton<IFoldersSettingsService>(settings.FoldersSettings)
-			.AddSingleton<IStartMenuService, StubStartMenuService>()
-			.AddSingleton<IFileTagsSettingsService, StubFileTagsSettingsService>()
-			.AddSingleton<IDateTimeFormatter, StubDateTimeFormatter>()
-			.AddSingleton<ISizeProvider>(sizeProvider)
-			.AddSingleton<IStorageCacheService, StorageCacheService>()
-			.AddSingleton(iconWarmUpQueue)
-			.BuildServiceProvider();
-		Ioc.Default.ConfigureServices(serviceProvider);
+		using var serviceProvider = AppTestServiceProviderFactory.Create(
+			settings,
+			iconWarmUpQueue,
+			sizeProvider);
 
 		var handle = new ScriptedWin32FindHandle(
 			[CreateFindData("visible-folder", isDirectory: true)]);
@@ -252,17 +240,7 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		for (var index = 0; index < 257; index++)
 			File.WriteAllText($"{filePath}:stream-{index}", "alternate stream");
 
-		using var serviceProvider = new ServiceCollection()
-			.AddSingleton<IUserSettingsService>(settings)
-			.AddSingleton<IFoldersSettingsService>(settings.FoldersSettings)
-			.AddSingleton<IStartMenuService, StubStartMenuService>()
-			.AddSingleton<IFileTagsSettingsService, StubFileTagsSettingsService>()
-			.AddSingleton<IDateTimeFormatter, StubDateTimeFormatter>()
-			.AddSingleton<ISizeProvider>(new RecordingSizeProvider())
-			.AddSingleton<IStorageCacheService, StorageCacheService>()
-			.AddSingleton(iconWarmUpQueue)
-			.BuildServiceProvider();
-		Ioc.Default.ConfigureServices(serviceProvider);
+		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
 
 		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
 		await using var source = new Win32FolderEnumerationSource(
@@ -302,17 +280,7 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			NullLogger<IconWarmUpQueue>.Instance,
 			capacity: 1,
 			workerCount: 1);
-		using var serviceProvider = new ServiceCollection()
-			.AddSingleton<IUserSettingsService>(settings)
-			.AddSingleton<IFoldersSettingsService>(settings.FoldersSettings)
-			.AddSingleton<IStartMenuService, StubStartMenuService>()
-			.AddSingleton<IFileTagsSettingsService, StubFileTagsSettingsService>()
-			.AddSingleton<IDateTimeFormatter, StubDateTimeFormatter>()
-			.AddSingleton<ISizeProvider>(new RecordingSizeProvider())
-			.AddSingleton<IStorageCacheService, StorageCacheService>()
-			.AddSingleton(iconWarmUpQueue)
-			.BuildServiceProvider();
-		Ioc.Default.ConfigureServices(serviceProvider);
+		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
 
 		File.WriteAllText(Path.Combine(FolderPath, "hidden.txt"), "hidden");
 		File.WriteAllText(Path.Combine(FolderPath, "system-hidden.txt"), "system hidden");
