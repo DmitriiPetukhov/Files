@@ -35,6 +35,94 @@ internal sealed class Win32NavigationExecutor : IWin32NavigationExecutor
 	/// <inheritdoc />
 	public async Task<Win32NavigationExecutionResult> ExecuteAsync(
 		string path,
+		IFolderPublicationCoordinator publicationCoordinator,
+		FolderItemListedItemProjection projection,
+		FolderPublicationStateReader stateReader,
+		Action<FolderItemMetadata?> initializeCurrentFolder,
+		CancellationToken cancellationToken)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(path);
+		ArgumentNullException.ThrowIfNull(publicationCoordinator);
+		ArgumentNullException.ThrowIfNull(projection);
+		ArgumentNullException.ThrowIfNull(stateReader);
+		ArgumentNullException.ThrowIfNull(initializeCurrentFolder);
+
+		using var openTimeoutCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+		using var openCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+			cancellationToken,
+			openTimeoutCancellation.Token);
+		var openResult = await scopeFactory.TryCreateAsync(
+			new FolderReference("win32", path),
+			openCancellation.Token);
+
+		if (openResult.Status != NavigationScopeOpenStatus.Opened)
+		{
+			initializeCurrentFolder(openResult.InitialMetadata);
+			return MapOpenResult(
+				openResult,
+				openTimeoutCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested);
+		}
+
+		var navigationScope = openResult.Scope ??
+			throw new InvalidOperationException("An opened Win32 navigation result must own a scope.");
+		await using var ownedNavigationScope = navigationScope;
+		initializeCurrentFolder(openResult.InitialMetadata);
+
+		try
+		{
+			await Task.Run(async () =>
+			{
+				var gitStateTask = gitStateResolver.IsRepositoryAsync(path, cancellationToken);
+				var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+				var iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
+				var folderSizeProvider = Ioc.Default.GetRequiredService<Services.SizeProvider.ISizeProvider>();
+				await using var enrichment = new Win32LegacyItemEnrichmentAdapter(
+					path,
+					gitStateTask,
+					projection,
+					userSettingsService,
+					iconWarmUpQueue,
+					folderSizeProvider,
+					(key, item, expectedRevision, token) => publicationCoordinator.TryApplyUpdateAsync(
+						key,
+						item,
+						expectedRevision,
+						token));
+
+				if (!publicationCoordinator.TrySetEnrichment(enrichment))
+					throw new OperationCanceledException(cancellationToken);
+
+				var readTask = stateReader.ConsumeAsync(
+					publicationCoordinator.ReadStates(cancellationToken),
+					cancellationToken);
+				var cheapAdapter = new Win32FolderPublicationAdapter(
+					ownedNavigationScope.EnumerationSource,
+					userSettingsService.FoldersSettingsService);
+				var enumerateTask = publicationCoordinator.EnumerateAsync(
+					cheapAdapter.EnumerateAsync(cancellationToken),
+					cancellationToken);
+
+				await Task.WhenAll(enumerateTask, readTask);
+			}, cancellationToken);
+
+			return new Win32NavigationExecutionResult(Win32NavigationExecutionStatus.Completed);
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			return new Win32NavigationExecutionResult(Win32NavigationExecutionStatus.Canceled);
+		}
+		catch (Win32Exception ex)
+		{
+			return new Win32NavigationExecutionResult(
+				Win32NavigationExecutionStatus.Failed,
+				MapFailureReason(ex.NativeErrorCode),
+				ex.NativeErrorCode.ToString());
+		}
+	}
+
+	/// <inheritdoc />
+	public async Task<Win32NavigationExecutionResult> ExecuteAsync(
+		string path,
 		IFolderPublicationCoordinator<ListedItem> publicationCoordinator,
 		Action<FolderItemMetadata?> initializeCurrentFolder,
 		CancellationToken cancellationToken)
