@@ -22,17 +22,26 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 	private readonly FolderItemListedItemProjection projection;
 	private readonly string? legacyRootPath;
 	private readonly bool isGitRepo;
+	private readonly IUserSettingsService? configuredUserSettingsService;
+	private readonly IconWarmUpQueue? configuredIconWarmUpQueue;
+	private readonly ISizeProvider? configuredFolderSizeProvider;
 
 	public Win32ListedItemEnumerationAdapter(
 		IFolderEnumerationSource source,
 		FolderItemListedItemProjection projection,
 		string? legacyRootPath = null,
-		bool isGitRepo = false)
+		bool isGitRepo = false,
+		IUserSettingsService? userSettingsService = null,
+		IconWarmUpQueue? iconWarmUpQueue = null,
+		ISizeProvider? folderSizeProvider = null)
 	{
 		this.source = source ?? throw new ArgumentNullException(nameof(source));
 		this.projection = projection ?? throw new ArgumentNullException(nameof(projection));
 		this.legacyRootPath = legacyRootPath;
 		this.isGitRepo = isGitRepo;
+		configuredUserSettingsService = userSettingsService;
+		configuredIconWarmUpQueue = iconWarmUpQueue;
+		configuredFolderSizeProvider = folderSizeProvider;
 	}
 
 	/// <inheritdoc />
@@ -46,17 +55,17 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 		var pendingMainItemCount = 0;
 		var publicationSampler = new IntervalSampler(PublicationInterval);
 		var scratchItems = ListedItemArrayPool.Shared.Rent();
-		IUserSettingsService? userSettingsService = null;
-		IconWarmUpQueue? iconWarmUpQueue = null;
-		ISizeProvider? folderSizeProvider = null;
+		IUserSettingsService? userSettingsService = configuredUserSettingsService;
+		IconWarmUpQueue? iconWarmUpQueue = configuredIconWarmUpQueue;
+		ISizeProvider? folderSizeProvider = configuredFolderSizeProvider;
 
 		if (legacyRootPath is not null)
 		{
 			try
 			{
-				userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
-				iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
-				folderSizeProvider = Ioc.Default.GetRequiredService<ISizeProvider>();
+				userSettingsService ??= Ioc.Default.GetRequiredService<IUserSettingsService>();
+				iconWarmUpQueue ??= Ioc.Default.GetRequiredService<IconWarmUpQueue>();
+				folderSizeProvider ??= Ioc.Default.GetRequiredService<ISizeProvider>();
 			}
 			catch
 			{
