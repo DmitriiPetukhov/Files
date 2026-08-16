@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Data.Items;
 using Files.App.UnitTests.TestDoubles.Utils.Storage.Navigation;
+using Files.App.Utils;
 using Files.App.Utils.Storage;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Navigation;
@@ -65,7 +66,7 @@ public sealed class Win32NavigationExecutorTests
 		var executor = new Win32NavigationExecutor(scopeFactory, gitStateResolver);
 		var coordinator = new RecordingFolderPublicationCoordinator<ListedItem>();
 
-		var exception = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
 			executor.ExecuteAsync(
 				FolderPath,
 				coordinator,
@@ -108,6 +109,30 @@ public sealed class Win32NavigationExecutorTests
 		Assert.AreEqual(Win32NavigationExecutionStatus.Canceled, result.Status);
 		Assert.AreEqual(1, source.DisposeCount);
 		Assert.IsTrue(coordinator.EnumerateCalled);
+	}
+
+	/// <summary>Ensures caller cancellation does not mark the open result as a timeout.</summary>
+	[TestMethod]
+	public void MapOpenResult_CallerCancellation_RemainsSilent()
+	{
+		var result = Win32NavigationExecutor.MapOpenResult(
+			new NavigationScopeOpenResult(NavigationScopeOpenStatus.Canceled, null, null, null),
+			openTimedOut: false);
+
+		Assert.AreEqual(Win32NavigationExecutionStatus.Canceled, result.Status);
+		Assert.IsFalse(result.OpenTimedOut);
+	}
+
+	/// <summary>Ensures timeout cancellation remains distinguishable for the existing DriveUnplugged mapping.</summary>
+	[TestMethod]
+	public void MapOpenResult_OpenTimeout_IsMarkedForUiMapping()
+	{
+		var result = Win32NavigationExecutor.MapOpenResult(
+			new NavigationScopeOpenResult(NavigationScopeOpenStatus.Canceled, null, null, null),
+			openTimedOut: true);
+
+		Assert.AreEqual(Win32NavigationExecutionStatus.Canceled, result.Status);
+		Assert.IsTrue(result.OpenTimedOut);
 	}
 
 	private static string FolderPath => Path.GetTempPath();

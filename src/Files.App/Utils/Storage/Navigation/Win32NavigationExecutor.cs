@@ -94,7 +94,8 @@ internal sealed class Win32NavigationExecutor : IWin32NavigationExecutor
 		}
 	}
 
-	private static Win32NavigationExecutionResult MapOpenResult(
+	/// <summary>Maps scope-open outcomes while retaining whether cancellation came from the timeout.</summary>
+	internal static Win32NavigationExecutionResult MapOpenResult(
 		NavigationScopeOpenResult openResult,
 		bool openTimedOut)
 		=> openResult.Status switch

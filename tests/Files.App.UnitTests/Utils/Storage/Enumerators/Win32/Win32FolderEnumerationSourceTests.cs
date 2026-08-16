@@ -107,7 +107,7 @@ public sealed class Win32FolderEnumerationSourceTests
 		Assert.IsTrue(await enumerator.MoveNextAsync());
 		cancellationTokenSource.Cancel();
 
-		await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
+		await Assert.ThrowsAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
 		Assert.AreEqual(1, handle.DisposeCount);
 	}
 
