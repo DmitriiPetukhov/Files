@@ -292,10 +292,66 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		Assert.AreEqual(258, publishedBatches[0].Count);
 	}
 
+	/// <summary>Ensures hidden, protected-system, and dot-file settings control both adapter outputs.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_AppliesVisibilitySettingsToHiddenSystemAndDotItems()
+	{
+		var settings = new StubUserSettingsService();
+		var iconWarmUpQueue = new IconWarmUpQueue(
+			new StubIconCacheService(),
+			NullLogger<IconWarmUpQueue>.Instance,
+			capacity: 1,
+			workerCount: 1);
+		using var serviceProvider = new ServiceCollection()
+			.AddSingleton<IUserSettingsService>(settings)
+			.AddSingleton<IFoldersSettingsService>(settings.FoldersSettings)
+			.AddSingleton<IStartMenuService, StubStartMenuService>()
+			.AddSingleton<IFileTagsSettingsService, StubFileTagsSettingsService>()
+			.AddSingleton<IDateTimeFormatter, StubDateTimeFormatter>()
+			.AddSingleton<ISizeProvider>(new RecordingSizeProvider())
+			.AddSingleton<IStorageCacheService, StorageCacheService>()
+			.AddSingleton(iconWarmUpQueue)
+			.BuildServiceProvider();
+		Ioc.Default.ConfigureServices(serviceProvider);
+
+		File.WriteAllText(Path.Combine(FolderPath, "hidden.txt"), "hidden");
+		File.WriteAllText(Path.Combine(FolderPath, "system-hidden.txt"), "system hidden");
+		File.WriteAllText(Path.Combine(FolderPath, ".dot-file"), "dot file");
+
+		settings.FoldersSettings.ShowHiddenItems = false;
+		settings.FoldersSettings.ShowProtectedSystemFiles = false;
+		settings.FoldersSettings.ShowDotFiles = false;
+		var hiddenResult = await EnumerateLegacyItemAsync(CreateFindData("hidden.txt", isHidden: true));
+		AssertPublishedAndFinalItemCount(hiddenResult, expectedCount: 0);
+
+		settings.FoldersSettings.ShowHiddenItems = true;
+		hiddenResult = await EnumerateLegacyItemAsync(CreateFindData("hidden.txt", isHidden: true));
+		AssertPublishedAndFinalItemCount(hiddenResult, expectedCount: 1);
+
+		var protectedResult = await EnumerateLegacyItemAsync(
+			CreateFindData("system-hidden.txt", isHidden: true, isSystem: true));
+		AssertPublishedAndFinalItemCount(protectedResult, expectedCount: 0);
+
+		settings.FoldersSettings.ShowProtectedSystemFiles = true;
+		protectedResult = await EnumerateLegacyItemAsync(
+			CreateFindData("system-hidden.txt", isHidden: true, isSystem: true));
+		AssertPublishedAndFinalItemCount(protectedResult, expectedCount: 1);
+
+		var dotResult = await EnumerateLegacyItemAsync(CreateFindData(".dot-file"));
+		AssertPublishedAndFinalItemCount(dotResult, expectedCount: 0);
+
+		settings.FoldersSettings.ShowDotFiles = true;
+		dotResult = await EnumerateLegacyItemAsync(CreateFindData(".dot-file"));
+		AssertPublishedAndFinalItemCount(dotResult, expectedCount: 1);
+
+		await iconWarmUpQueue.DisposeAsync();
+	}
+
 	private static Win32PInvoke.WIN32_FIND_DATA CreateFindData(
 		string name,
 		bool isDirectory = false,
-		bool isHidden = false)
+		bool isHidden = false,
+		bool isSystem = false)
 	{
 		var fileTime = DateTime.UtcNow.ToFileTimeUtc();
 		var nativeFileTime = new System.Runtime.InteropServices.ComTypes.FILETIME
@@ -308,11 +364,42 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		{
 			cFileName = name,
 			dwFileAttributes = (isDirectory ? (uint)FileAttributes.Directory : 0u) |
-			(isHidden ? (uint)FileAttributes.Hidden : 0u),
+			(isHidden ? (uint)FileAttributes.Hidden : 0u) |
+			(isSystem ? (uint)FileAttributes.System : 0u),
 			ftCreationTime = nativeFileTime,
 			ftLastAccessTime = nativeFileTime,
 			ftLastWriteTime = nativeFileTime,
 		};
+	}
+
+	private async Task<(IReadOnlyCollection<ListedItem> FinalItems, List<IReadOnlyCollection<ListedItem>> PublishedBatches)> EnumerateLegacyItemAsync(
+		Win32PInvoke.WIN32_FIND_DATA findData)
+	{
+		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		await using var source = new Win32FolderEnumerationSource(FolderPath, handle, findData);
+		var adapter = new Win32ListedItemEnumerationAdapter(
+			source,
+			FolderItemListedItemProjectionTestFactory.Create(),
+			legacyRootPath: FolderPath);
+		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
+
+		var finalItems = await adapter.EnumerateAsync(
+			batch =>
+			{
+				publishedBatches.Add(batch);
+				return Task.CompletedTask;
+			},
+			CancellationToken.None);
+
+		return (finalItems, publishedBatches);
+	}
+
+	private static void AssertPublishedAndFinalItemCount(
+		(IReadOnlyCollection<ListedItem> FinalItems, List<IReadOnlyCollection<ListedItem>> PublishedBatches) result,
+		int expectedCount)
+	{
+		Assert.AreEqual(expectedCount, result.FinalItems.Count);
+		Assert.AreEqual(expectedCount, result.PublishedBatches.SelectMany(batch => batch).Count());
 	}
 
 	private FolderItem CreateFolderItem(string name)
