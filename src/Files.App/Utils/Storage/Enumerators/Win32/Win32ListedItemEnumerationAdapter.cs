@@ -7,6 +7,7 @@ using Files.App.Utils.Storage;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Projections;
 using Files.App.Services.SizeProvider;
+using Microsoft.Extensions.Logging;
 using FileAttributes = System.IO.FileAttributes;
 
 namespace Files.App.Utils.Storage.Enumerators.Win32;
@@ -154,6 +155,7 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 			var isHidden = fileAttributes.HasFlag(FileAttributes.Hidden);
 			var isSystem = fileAttributes.HasFlag(FileAttributes.System);
 			var startsWithDot = findData.cFileName.StartsWith('.');
+			// TODO: Move visibility filtering out of this compatibility adapter when provider-neutral filtering is introduced.
 			if ((isHidden && (!foldersSettings.ShowHiddenItems || isSystem && !foldersSettings.ShowProtectedSystemFiles)) ||
 				(startsWithDot && !foldersSettings.ShowDotFiles))
 				return (buffer, 0, 0);
