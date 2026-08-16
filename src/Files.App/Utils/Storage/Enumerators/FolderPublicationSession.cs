@@ -2,8 +2,127 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Files.App.Utils.Storage.Contracts;
+using Files.App.Utils.Storage.Enumerators;
 
 namespace Files.App.Utils.Storage;
+
+/// <summary>
+/// Owns keyed provider-neutral folder items and immutable accumulated states for one navigation.
+/// </summary>
+internal sealed class FolderPublicationSession : IFolderPublicationSession
+{
+	private readonly object syncRoot = new();
+	private readonly Dictionary<FolderItemKey, FolderItem> itemsByKey = [];
+	private readonly List<FolderItemKey> sourceOrder = [];
+	private readonly Dictionary<FolderItemKey, long> revisions = [];
+	private FolderPublicationState currentState = new(0, ImmutableArray<FolderItem>.Empty);
+	private long nextVersion;
+	private bool isActive = true;
+
+	/// <inheritdoc />
+	public bool TryAppend(
+		FolderEnumerationBatch<FolderItem> batch,
+		CancellationToken cancellationToken,
+		out FolderPublicationState? state)
+	{
+		ArgumentNullException.ThrowIfNull(batch);
+
+		lock (syncRoot)
+		{
+			if (!CanMutate(cancellationToken))
+			{
+				state = null;
+				return false;
+			}
+
+			foreach (var item in batch.Items)
+			{
+				if (itemsByKey.ContainsKey(item.Key))
+				{
+					itemsByKey[item.Key] = item;
+					revisions[item.Key]++;
+				}
+				else
+				{
+					itemsByKey.Add(item.Key, item);
+					sourceOrder.Add(item.Key);
+					revisions.Add(item.Key, 1);
+				}
+			}
+
+			state = CreateNextState();
+			return true;
+		}
+	}
+
+	/// <inheritdoc />
+	public bool TryApplyUpdate(
+		FolderItemKey key,
+		FolderItem item,
+		long expectedRevision,
+		CancellationToken cancellationToken,
+		out FolderPublicationState? state)
+	{
+		ArgumentNullException.ThrowIfNull(item);
+
+		lock (syncRoot)
+		{
+			if (!CanMutate(cancellationToken) || key != item.Key ||
+				!revisions.TryGetValue(key, out var currentRevision) || currentRevision != expectedRevision)
+			{
+				state = null;
+				return false;
+			}
+
+			itemsByKey[key] = item;
+			revisions[key] = currentRevision + 1;
+			state = CreateNextState();
+			return true;
+		}
+	}
+
+	/// <inheritdoc />
+	public FolderPublicationState GetCurrentState()
+	{
+		lock (syncRoot)
+			return currentState;
+	}
+
+	/// <inheritdoc />
+	public bool TryGetRevision(FolderItemKey key, out long revision)
+	{
+		lock (syncRoot)
+			return revisions.TryGetValue(key, out revision);
+	}
+
+	/// <inheritdoc />
+	public void Complete()
+	{
+		lock (syncRoot)
+			isActive = false;
+	}
+
+	/// <inheritdoc />
+	public void Cancel()
+	{
+		lock (syncRoot)
+			isActive = false;
+	}
+
+	private FolderPublicationState CreateNextState()
+	{
+		var items = ImmutableArray.CreateBuilder<FolderItem>(sourceOrder.Count);
+		foreach (var key in sourceOrder)
+			items.Add(itemsByKey[key]);
+
+		currentState = new FolderPublicationState(++nextVersion, items.MoveToImmutable());
+		return currentState;
+	}
+
+	private bool CanMutate(CancellationToken cancellationToken)
+		=> isActive && !cancellationToken.IsCancellationRequested;
+}
 
 /// <summary>
 /// Owns canonical items and an incrementally maintained ordered index for one navigation.
