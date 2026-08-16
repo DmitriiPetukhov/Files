@@ -72,10 +72,10 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 				foreach (var item in batch.Items)
 				{
 					cancellationToken.ThrowIfCancellationRequested();
-					(ListedItem[] Buffer, int Count, int AcceptedMainItemCount) materialized;
+					(ListedItem[] Buffer, int Count, int AcceptedMainItemCount, bool IsOverflow) materialized;
 					if (legacyRootPath is null)
 					{
-						materialized = (scratchItems, 1, 1);
+						materialized = (scratchItems, 1, 1, false);
 					}
 					else
 					{
@@ -96,17 +96,24 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 						}
 					}
 
-					scratchItems = materialized.Buffer;
-					if (legacyRootPath is null)
-						scratchItems[0] = projection.Project(item);
-
-					if (materialized.Count == 0)
-						continue;
-
-					for (var index = 0; index < materialized.Count; index++)
+					try
 					{
-						allItems.Add(scratchItems[index]);
-						pendingItems.Add(scratchItems[index]);
+						if (legacyRootPath is null)
+							materialized.Buffer[0] = projection.Project(item);
+
+						if (materialized.Count == 0)
+							continue;
+
+						for (var index = 0; index < materialized.Count; index++)
+						{
+							allItems.Add(materialized.Buffer[index]);
+							pendingItems.Add(materialized.Buffer[index]);
+						}
+					}
+					finally
+					{
+						if (materialized.IsOverflow)
+							Array.Clear(materialized.Buffer);
 					}
 
 					pendingMainItemCount += materialized.AcceptedMainItemCount;
@@ -131,7 +138,7 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 		}
 	}
 
-	private async ValueTask<(ListedItem[] Buffer, int Count, int AcceptedMainItemCount)> MaterializeLegacyItemAsync(
+	private async ValueTask<(ListedItem[] Buffer, int Count, int AcceptedMainItemCount, bool IsOverflow)> MaterializeLegacyItemAsync(
 		FolderItem item,
 		IUserSettingsService userSettingsService,
 		IconWarmUpQueue iconWarmUpQueue,
@@ -147,7 +154,7 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 			if (item.ProviderData is not Win32FolderItemData providerData)
 			{
 				buffer[0] = projection.Project(item);
-				return (buffer, 1, 1);
+				return (buffer, 1, 1, false);
 			}
 
 			var findData = providerData.FindData;
@@ -158,14 +165,14 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 			// TODO: Move visibility filtering out of this compatibility adapter when provider-neutral filtering is introduced.
 			if ((isHidden && (!foldersSettings.ShowHiddenItems || isSystem && !foldersSettings.ShowProtectedSystemFiles)) ||
 				(startsWithDot && !foldersSettings.ShowDotFiles))
-				return (buffer, 0, 0);
+				return (buffer, 0, 0, false);
 
 			var isFolder = fileAttributes.HasFlag(FileAttributes.Directory);
 			var listedItem = isFolder
 				? await Win32StorageEnumerator.GetFolder(findData, legacyRootPath!, isGitRepo, cancellationToken)
 				: await Win32StorageEnumerator.GetFile(findData, legacyRootPath!, isGitRepo, cancellationToken);
 			if (listedItem is null)
-				return (buffer, 0, 0);
+				return (buffer, 0, 0, false);
 
 			var itemCount = 1;
 			buffer[0] = listedItem;
@@ -191,15 +198,12 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 				_ = folderSizeProvider.UpdateAsync(listedItem.ItemPath, cancellationToken);
 			}
 
-			if (!ReferenceEquals(buffer, originalBuffer))
-				ListedItemArrayPool.Shared.Return(originalBuffer);
-
-			return (buffer, itemCount, 1);
+			return (buffer, itemCount, 1, !ReferenceEquals(buffer, originalBuffer));
 		}
 		catch
 		{
 			if (!ReferenceEquals(buffer, originalBuffer))
-				ListedItemArrayPool.Shared.Return(buffer);
+				Array.Clear(buffer);
 
 			throw;
 		}

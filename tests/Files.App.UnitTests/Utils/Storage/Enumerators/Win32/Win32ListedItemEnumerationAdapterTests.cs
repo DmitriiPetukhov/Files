@@ -235,6 +235,63 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		CollectionAssert.Contains(sizeProvider.UpdatePaths, folderPath);
 	}
 
+	/// <summary>Ensures an item-scoped overflow buffer does not release the persistent pool buffer early.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_KeepsPersistentBufferRentedWhilePublishingOverflowItem()
+	{
+		var settings = new StubUserSettingsService();
+		settings.FoldersSettings.AreAlternateStreamsVisible = true;
+		var iconCache = new StubIconCacheService();
+		var iconWarmUpQueue = new IconWarmUpQueue(
+			iconCache,
+			NullLogger<IconWarmUpQueue>.Instance,
+			capacity: 1,
+			workerCount: 1);
+		var filePath = Path.Combine(FolderPath, "overflow.txt");
+		File.WriteAllText(filePath, "overflow content");
+		for (var index = 0; index < 257; index++)
+			File.WriteAllText($"{filePath}:stream-{index}", "alternate stream");
+
+		using var serviceProvider = new ServiceCollection()
+			.AddSingleton<IUserSettingsService>(settings)
+			.AddSingleton<IFoldersSettingsService>(settings.FoldersSettings)
+			.AddSingleton<IStartMenuService, StubStartMenuService>()
+			.AddSingleton<IFileTagsSettingsService, StubFileTagsSettingsService>()
+			.AddSingleton<IDateTimeFormatter, StubDateTimeFormatter>()
+			.AddSingleton<ISizeProvider>(new RecordingSizeProvider())
+			.AddSingleton<IStorageCacheService, StorageCacheService>()
+			.AddSingleton(iconWarmUpQueue)
+			.BuildServiceProvider();
+		Ioc.Default.ConfigureServices(serviceProvider);
+
+		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
+		await using var source = new Win32FolderEnumerationSource(
+			FolderPath,
+			handle,
+			CreateFindData("overflow.txt"));
+		var adapter = new Win32ListedItemEnumerationAdapter(
+			source,
+			FolderItemListedItemProjectionTestFactory.Create(),
+			legacyRootPath: FolderPath);
+		var availableBefore = ListedItemArrayPool.Shared.AvailableCount;
+		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
+
+		var finalItems = await adapter.EnumerateAsync(
+			batch =>
+			{
+				Assert.AreEqual(Math.Max(0, availableBefore - 1), ListedItemArrayPool.Shared.AvailableCount);
+				publishedBatches.Add(batch);
+				return Task.CompletedTask;
+			},
+			CancellationToken.None);
+
+		await iconWarmUpQueue.DisposeAsync();
+
+		Assert.AreEqual(258, finalItems.Count);
+		Assert.AreEqual(1, publishedBatches.Count);
+		Assert.AreEqual(258, publishedBatches[0].Count);
+	}
+
 	private static Win32PInvoke.WIN32_FIND_DATA CreateFindData(
 		string name,
 		bool isDirectory = false,
