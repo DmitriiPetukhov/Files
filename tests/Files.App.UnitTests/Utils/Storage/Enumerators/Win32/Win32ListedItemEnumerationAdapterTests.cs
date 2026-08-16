@@ -130,6 +130,57 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			publishedBatches[0].Select(item => item.ItemNameRaw).ToArray());
 	}
 
+	/// <summary>Ensures filtered entries still flush pending items after the publication interval elapses.</summary>
+	[TestMethod]
+	public async Task EnumerateAsync_ChecksTimeThresholdAfterFilteredItem()
+	{
+		var settings = new StubUserSettingsService();
+		var iconWarmUpQueue = new IconWarmUpQueue(
+			new StubIconCacheService(),
+			NullLogger<IconWarmUpQueue>.Instance,
+			capacity: 1,
+			workerCount: 1);
+		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
+
+		File.WriteAllText(Path.Combine(FolderPath, "visible.txt"), "visible");
+		var batches = new IReadOnlyCollection<FolderItem>[]
+		{
+			[CreateWin32FolderItem("visible.txt")],
+			[CreateWin32FolderItem("hidden.txt", isHidden: true)],
+			[CreateWin32FolderItem("hidden-again.txt", isHidden: true)],
+		};
+		await using var source = new ScriptedFolderEnumerationSource(
+			batches,
+			TimeSpan.FromMilliseconds(600));
+		var adapter = new Win32ListedItemEnumerationAdapter(
+			source,
+			FolderItemListedItemProjectionTestFactory.Create(),
+			legacyRootPath: FolderPath);
+		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
+
+		try
+		{
+			var finalItems = await adapter.EnumerateAsync(
+				batch =>
+				{
+					Assert.IsFalse(source.EnumerationCompleted);
+					publishedBatches.Add(batch);
+					return Task.CompletedTask;
+				},
+				CancellationToken.None);
+
+			Assert.AreEqual(1, finalItems.Count);
+			Assert.AreEqual(1, publishedBatches.Count);
+			CollectionAssert.AreEqual(
+				new[] { "visible.txt" },
+				publishedBatches[0].Select(item => item.ItemNameRaw).ToArray());
+		}
+		finally
+		{
+			await iconWarmUpQueue.DisposeAsync();
+		}
+	}
+
 	/// <summary>Ensures source failures propagate through the compatibility adapter.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_PropagatesSourceFailure()
@@ -377,6 +428,14 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			FolderItemKind.File,
 			null,
 			null);
+
+	private FolderItem CreateWin32FolderItem(string name, bool isHidden = false)
+		=> new(
+			new FolderItemKey("win32", Path.Combine(FolderPath, name)),
+			name,
+			FolderItemKind.File,
+			null,
+			new Win32FolderItemData(CreateFindData(name, isHidden: isHidden)));
 
 	private static async Task<TException> CaptureExceptionAsync<TException>(Func<Task> action)
 		where TException : Exception

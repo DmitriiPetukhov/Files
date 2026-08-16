@@ -24,6 +24,9 @@ internal sealed class ScriptedFolderEnumerationSource : IFolderEnumerationSource
 		this.delayBetweenBatches = delayBetweenBatches;
 	}
 
+	/// <summary>Gets whether the scripted enumeration has reached completion.</summary>
+	public bool EnumerationCompleted { get; private set; }
+
 	/// <inheritdoc />
 	public IAsyncEnumerable<FolderEnumerationBatch<FolderItem>> EnumerateAsync(
 		CancellationToken cancellationToken = default)
@@ -41,12 +44,19 @@ internal sealed class ScriptedFolderEnumerationSource : IFolderEnumerationSource
 	private async IAsyncEnumerable<FolderEnumerationBatch<FolderItem>> EnumerateBatchesAsync(
 		[System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
 	{
-		for (var index = 0; index < batches.Count; index++)
+		try
 		{
-			if (index > 0 && delayBetweenBatches > TimeSpan.Zero)
-				await Task.Delay(delayBetweenBatches, cancellationToken);
+			for (var index = 0; index < batches.Count; index++)
+			{
+				if (index > 0 && delayBetweenBatches > TimeSpan.Zero)
+					await Task.Delay(delayBetweenBatches, cancellationToken);
 
-			yield return new FolderEnumerationBatch<FolderItem>(batches[index], index);
+				yield return new FolderEnumerationBatch<FolderItem>(batches[index], index);
+			}
+		}
+		finally
+		{
+			EnumerationCompleted = true;
 		}
 	}
 }

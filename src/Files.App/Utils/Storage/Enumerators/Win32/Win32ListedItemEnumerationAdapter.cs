@@ -101,13 +101,13 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 						if (legacyRootPath is null)
 							materialized.Buffer[0] = projection.Project(item);
 
-						if (materialized.Count == 0)
-							continue;
-
-						for (var index = 0; index < materialized.Count; index++)
+						if (materialized.Count > 0)
 						{
-							allItems.Add(materialized.Buffer[index]);
-							pendingItems.Add(materialized.Buffer[index]);
+							for (var index = 0; index < materialized.Count; index++)
+							{
+								allItems.Add(materialized.Buffer[index]);
+								pendingItems.Add(materialized.Buffer[index]);
+							}
 						}
 					}
 					finally
@@ -118,7 +118,8 @@ internal sealed class Win32ListedItemEnumerationAdapter : IFolderEnumerationSour
 
 					pendingMainItemCount += materialized.AcceptedMainItemCount;
 
-					if (pendingMainItemCount >= MainItemsPerPublication || publicationSampler.CheckNow())
+					if (pendingItems.Count > 0 &&
+						(pendingMainItemCount >= MainItemsPerPublication || publicationSampler.CheckNow()))
 					{
 						await publishBatchAsync(pendingItems.ToArray());
 						pendingItems.Clear();
