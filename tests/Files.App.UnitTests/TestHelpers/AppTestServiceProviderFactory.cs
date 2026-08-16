@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.DependencyInjection;
 using Files.App.Data.Contracts;
 using Files.App.Services;
@@ -11,13 +12,17 @@ using Files.App.UnitTests.TestDoubles.Services;
 using Files.App.Utils;
 using Files.App.Utils.Storage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Files.App.UnitTests.TestHelpers;
 
 /// <summary>Builds the minimal application service graph used by app unit tests.</summary>
 internal static class AppTestServiceProviderFactory
 {
-	/// <summary>Creates and registers the services required by legacy materialization tests.</summary>
+	private static readonly object syncRoot = new();
+	private static ServiceProvider? defaultServiceProvider;
+
+	/// <summary>Builds the services required by a legacy materialization test.</summary>
 	public static ServiceProvider Create(
 		StubUserSettingsService settings,
 		IconWarmUpQueue iconWarmUpQueue,
@@ -37,7 +42,39 @@ internal static class AppTestServiceProviderFactory
 			.AddSingleton(iconWarmUpQueue)
 			.BuildServiceProvider();
 
-		Ioc.Default.ConfigureServices(serviceProvider);
 		return serviceProvider;
+	}
+
+	/// <summary>Configures the process-wide application services once before unit tests run.</summary>
+	public static void ConfigureDefaultServices()
+	{
+		lock (syncRoot)
+		{
+			if (defaultServiceProvider is not null)
+				return;
+
+			var settings = new StubUserSettingsService();
+			var iconWarmUpQueue = new IconWarmUpQueue(
+				new StubIconCacheService(),
+				NullLogger<IconWarmUpQueue>.Instance,
+				capacity: 1,
+				workerCount: 1);
+			defaultServiceProvider = Create(settings, iconWarmUpQueue);
+			Ioc.Default.ConfigureServices(defaultServiceProvider);
+		}
+	}
+
+	/// <summary>Disposes the process-wide application services after unit tests complete.</summary>
+	public static async ValueTask DisposeDefaultServicesAsync()
+	{
+		ServiceProvider? serviceProvider;
+		lock (syncRoot)
+		{
+			serviceProvider = defaultServiceProvider;
+			defaultServiceProvider = null;
+		}
+
+		if (serviceProvider is not null)
+			await serviceProvider.DisposeAsync();
 	}
 }

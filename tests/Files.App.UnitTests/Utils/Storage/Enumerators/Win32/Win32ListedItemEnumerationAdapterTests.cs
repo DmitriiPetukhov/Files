@@ -140,7 +140,6 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			NullLogger<IconWarmUpQueue>.Instance,
 			capacity: 1,
 			workerCount: 1);
-		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
 
 		File.WriteAllText(Path.Combine(FolderPath, "visible.txt"), "visible");
 		var batches = new IReadOnlyCollection<FolderItem>[]
@@ -155,7 +154,9 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		var adapter = new Win32ListedItemEnumerationAdapter(
 			source,
 			FolderItemListedItemProjectionTestFactory.Create(),
-			legacyRootPath: FolderPath);
+			legacyRootPath: FolderPath,
+			userSettingsService: settings,
+			iconWarmUpQueue: iconWarmUpQueue);
 		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
 
 		try
@@ -240,10 +241,6 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		File.WriteAllText(filePath, "visible content");
 		Directory.CreateDirectory(folderPath);
 		File.WriteAllText(filePath + ":metadata", "alternate stream");
-		using var serviceProvider = AppTestServiceProviderFactory.Create(
-			settings,
-			iconWarmUpQueue,
-			sizeProvider);
 
 		var handle = new ScriptedWin32FindHandle(
 			[CreateFindData("visible-folder", isDirectory: true)]);
@@ -255,7 +252,10 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			source,
 			FolderItemListedItemProjectionTestFactory.Create(),
 			legacyRootPath: FolderPath,
-			isGitRepo: true);
+			isGitRepo: true,
+			userSettingsService: settings,
+			iconWarmUpQueue: iconWarmUpQueue,
+			folderSizeProvider: sizeProvider);
 
 		var finalItems = await adapter.EnumerateAsync(
 			_ => Task.CompletedTask,
@@ -291,8 +291,6 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		for (var index = 0; index < 257; index++)
 			File.WriteAllText($"{filePath}:stream-{index}", "alternate stream");
 
-		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
-
 		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
 		await using var source = new Win32FolderEnumerationSource(
 			FolderPath,
@@ -301,7 +299,9 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		var adapter = new Win32ListedItemEnumerationAdapter(
 			source,
 			FolderItemListedItemProjectionTestFactory.Create(),
-			legacyRootPath: FolderPath);
+			legacyRootPath: FolderPath,
+			userSettingsService: settings,
+			iconWarmUpQueue: iconWarmUpQueue);
 		var availableBefore = ListedItemArrayPool.Shared.AvailableCount;
 		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
 
@@ -331,7 +331,6 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 			NullLogger<IconWarmUpQueue>.Instance,
 			capacity: 1,
 			workerCount: 1);
-		using var serviceProvider = AppTestServiceProviderFactory.Create(settings, iconWarmUpQueue);
 
 		File.WriteAllText(Path.Combine(FolderPath, "hidden.txt"), "hidden");
 		File.WriteAllText(Path.Combine(FolderPath, "system-hidden.txt"), "system hidden");
@@ -340,27 +339,31 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		settings.FoldersSettings.ShowHiddenItems = false;
 		settings.FoldersSettings.ShowProtectedSystemFiles = false;
 		settings.FoldersSettings.ShowDotFiles = false;
-		var hiddenResult = await EnumerateLegacyItemAsync(CreateFindData("hidden.txt", isHidden: true));
+		var hiddenResult = await EnumerateLegacyItemAsync(settings, iconWarmUpQueue, CreateFindData("hidden.txt", isHidden: true));
 		AssertPublishedAndFinalItemCount(hiddenResult, expectedCount: 0);
 
 		settings.FoldersSettings.ShowHiddenItems = true;
-		hiddenResult = await EnumerateLegacyItemAsync(CreateFindData("hidden.txt", isHidden: true));
+		hiddenResult = await EnumerateLegacyItemAsync(settings, iconWarmUpQueue, CreateFindData("hidden.txt", isHidden: true));
 		AssertPublishedAndFinalItemCount(hiddenResult, expectedCount: 1);
 
 		var protectedResult = await EnumerateLegacyItemAsync(
+			settings,
+			iconWarmUpQueue,
 			CreateFindData("system-hidden.txt", isHidden: true, isSystem: true));
 		AssertPublishedAndFinalItemCount(protectedResult, expectedCount: 0);
 
 		settings.FoldersSettings.ShowProtectedSystemFiles = true;
 		protectedResult = await EnumerateLegacyItemAsync(
+			settings,
+			iconWarmUpQueue,
 			CreateFindData("system-hidden.txt", isHidden: true, isSystem: true));
 		AssertPublishedAndFinalItemCount(protectedResult, expectedCount: 1);
 
-		var dotResult = await EnumerateLegacyItemAsync(CreateFindData(".dot-file"));
+		var dotResult = await EnumerateLegacyItemAsync(settings, iconWarmUpQueue, CreateFindData(".dot-file"));
 		AssertPublishedAndFinalItemCount(dotResult, expectedCount: 0);
 
 		settings.FoldersSettings.ShowDotFiles = true;
-		dotResult = await EnumerateLegacyItemAsync(CreateFindData(".dot-file"));
+		dotResult = await EnumerateLegacyItemAsync(settings, iconWarmUpQueue, CreateFindData(".dot-file"));
 		AssertPublishedAndFinalItemCount(dotResult, expectedCount: 1);
 
 		await iconWarmUpQueue.DisposeAsync();
@@ -392,6 +395,8 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 	}
 
 	private async Task<(IReadOnlyCollection<ListedItem> FinalItems, List<IReadOnlyCollection<ListedItem>> PublishedBatches)> EnumerateLegacyItemAsync(
+		StubUserSettingsService settings,
+		IconWarmUpQueue iconWarmUpQueue,
 		Win32PInvoke.WIN32_FIND_DATA findData)
 	{
 		var handle = new ScriptedWin32FindHandle(Array.Empty<Win32PInvoke.WIN32_FIND_DATA>());
@@ -399,7 +404,9 @@ public sealed class Win32ListedItemEnumerationAdapterTests
 		var adapter = new Win32ListedItemEnumerationAdapter(
 			source,
 			FolderItemListedItemProjectionTestFactory.Create(),
-			legacyRootPath: FolderPath);
+			legacyRootPath: FolderPath,
+			userSettingsService: settings,
+			iconWarmUpQueue: iconWarmUpQueue);
 		var publishedBatches = new List<IReadOnlyCollection<ListedItem>>();
 
 		var finalItems = await adapter.EnumerateAsync(

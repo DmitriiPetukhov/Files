@@ -6,6 +6,7 @@ using Files.Shared.Helpers;
 using LibGit2Sharp;
 using Files.App.Utils.Storage.Contracts;
 using Files.App.Utils.Storage.Navigation;
+using Files.App.Utils.Storage.Projections;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
@@ -177,7 +178,9 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource updateTagGroupCTS;
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
-		private IFolderPublicationCoordinator<ListedItem>? folderPublicationCoordinator;
+		private IFolderPublicationCoordinator? folderPublicationCoordinator;
+		private FolderPublicationStateReader? folderPublicationStateReader;
+		private IFolderSnapshotCoalescer<ListedItem>? folderSnapshotCoalescer;
 		private bool isDisposed;
 
 		public event EventHandler FocusFilterHeader;
@@ -921,8 +924,12 @@ namespace Files.App.ViewModels
 		public void CancelLoadAndClearFiles()
 		{
 			Debug.WriteLine("CancelLoadAndClearFiles");
-			_ = folderPublicationCoordinator?.CancelAsync();
+			if (folderPublicationCoordinator is { } coordinator)
+				_ = coordinator.DisposeAsync().AsTask();
+			_ = folderSnapshotCoalescer?.CancelAsync();
 			folderPublicationCoordinator = null;
+			folderPublicationStateReader = null;
+			folderSnapshotCoalescer = null;
 			CloseWatcher();
 			CancelNetworkAvailabilityUpdate();
 			IsNetworkDiscoveryInfoBarOpen = false;
@@ -1198,10 +1205,11 @@ namespace Files.App.ViewModels
 		private async Task<bool> TryRebuildFolderPublicationIndexAsync()
 		{
 			var coordinator = folderPublicationCoordinator;
-			if (coordinator is null)
+			var stateReader = folderPublicationStateReader;
+			if (coordinator is null || stateReader is null)
 				return false;
 
-			var rebuilt = await coordinator.TryRebuildIndexAsync(
+			var rebuilt = await stateReader.TryRebuildIndexAsync(
 				SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
 					folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
 				addFilesCTS.Token);
@@ -1210,7 +1218,7 @@ namespace Files.App.ViewModels
 		}
 
 		private async Task PublishFolderSnapshotAsync(
-			IFolderPublicationCoordinator<ListedItem> coordinator,
+			IFolderPublicationCoordinator coordinator,
 			IReadOnlyCollection<ListedItem> snapshot,
 			CancellationToken cancellationToken)
 		{
@@ -2207,16 +2215,33 @@ namespace Files.App.ViewModels
 					CurrentFolder = currentFolder;
 				}
 
-				FolderPublicationCoordinator<ListedItem>? publicationCoordinator = null;
-				publicationCoordinator = new FolderPublicationCoordinator<ListedItem>(
+				var publicationCoordinator = new FolderPublicationCoordinator();
+				var projection = new FolderItemListedItemProjection();
+				FolderSnapshotCoalescer<ListedItem> snapshotCoalescer;
+				snapshotCoalescer = new FolderSnapshotCoalescer<ListedItem>(
+					new DispatcherQueueFolderSnapshotScheduler(dispatcherQueue),
+					snapshot => PublishFolderSnapshotAsync(publicationCoordinator, snapshot, cancellationToken),
+					() => ReferenceEquals(folderPublicationCoordinator, publicationCoordinator) &&
+						!cancellationToken.IsCancellationRequested &&
+						!IsLoadingCancelled);
+				var stateReader = new FolderPublicationStateReader(
+					projection,
 					SortingHelper.GetComparer(folderSettings.DirectorySortOption, folderSettings.DirectorySortDirection,
 						folderSettings.SortDirectoriesAlongsideFiles, folderSettings.SortFilesFirst),
-					snapshot => PublishFolderSnapshotAsync(publicationCoordinator!, snapshot, cancellationToken));
+					snapshotCoalescer);
 				folderPublicationCoordinator = publicationCoordinator;
+				folderPublicationStateReader = stateReader;
+				folderSnapshotCoalescer = snapshotCoalescer;
 				void ClearPublicationCoordinator()
 				{
+					_ = publicationCoordinator.DisposeAsync().AsTask();
+					_ = snapshotCoalescer.CancelAsync();
 					if (ReferenceEquals(folderPublicationCoordinator, publicationCoordinator))
+					{
 						folderPublicationCoordinator = null;
+						folderPublicationStateReader = null;
+						folderSnapshotCoalescer = null;
+					}
 				}
 
 				Win32NavigationExecutionResult executionResult;
@@ -2225,6 +2250,8 @@ namespace Files.App.ViewModels
 					executionResult = await win32NavigationExecutor.ExecuteAsync(
 						path,
 						publicationCoordinator,
+						projection,
+						stateReader,
 						InitializeCurrentFolder,
 						cancellationToken);
 				}
