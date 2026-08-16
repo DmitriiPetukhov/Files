@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.Windows.AppLifecycle;
 using Windows.Win32;
 using Windows.ApplicationModel;
@@ -25,8 +26,8 @@ namespace Files.App
 		public static TaskCompletionSource? SplashScreenLoadingTCS { get; private set; }
 		public static string? OutputPath { get; set; }
 
-		private static CommandBarFlyout? _LastOpenedFlyout;
-		public static CommandBarFlyout? LastOpenedFlyout
+		private static FlyoutBase? _LastOpenedFlyout;
+		public static FlyoutBase? LastOpenedFlyout
 		{
 			set
 			{
@@ -352,11 +353,11 @@ namespace Files.App
 		/// </summary>
 		private static void LastOpenedFlyout_Closed(object? sender, object e)
 		{
-			if (sender is not CommandBarFlyout commandBarFlyout)
+			if (sender is not FlyoutBase flyoutBase)
 				return;
 
-			commandBarFlyout.Closed -= LastOpenedFlyout_Closed;
-			if (_LastOpenedFlyout == commandBarFlyout)
+			flyoutBase.Closed -= LastOpenedFlyout_Closed;
+			if (_LastOpenedFlyout == flyoutBase)
 				_LastOpenedFlyout = null;
 		}
 	}

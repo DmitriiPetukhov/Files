@@ -178,6 +178,7 @@ namespace Files.App.ViewModels
 		private CancellationTokenSource? filterDebounceCS;
 		private CancellationTokenSource? networkAvailabilityCTS;
 		private IFolderPublicationCoordinator<ListedItem>? folderPublicationCoordinator;
+		private bool isDisposed;
 
 		public event EventHandler FocusFilterHeader;
 
@@ -2340,7 +2341,8 @@ namespace Files.App.ViewModels
 						{
 							filesAndFolders.AddRange(intermediateList);
 
-							await OrderFilesAndFoldersAsync();
+							// Sorting the growing list on every intermediate batch is O(batches x n log n);
+							// append unsorted here (matching the Win32 path) and sort once when enumeration completes.
 							await ApplyFilesAndFoldersChangesAsync();
 						});
 
@@ -3235,11 +3237,18 @@ namespace Files.App.ViewModels
 
 		public void Dispose()
 		{
+			if (isDisposed)
+				return;
+
+			isDisposed = true;
 			CancelLoadAndClearFiles();
 			StopWatchingForLocationRestoration();
 			filterDebounceCS?.Cancel();
 			filterDebounceCS?.Dispose();
 			networkAvailabilityCTS?.Dispose();
+			semaphoreCTS.Cancel();
+			searchCTS?.Cancel();
+			updateTagGroupCTS?.Cancel();
 			App.Logger.LogInformation($"ShellViewModel.Dispose: CurrentFolder={LogPathHelper.GetPathIdentifier(CurrentFolder?.ItemPath)}");
 
 			StorageTrashBinService.Watcher.ItemAdded -= RecycleBinItemCreatedAsync;
@@ -3250,6 +3259,15 @@ namespace Files.App.ViewModels
 			fileTagsSettingsService.OnTagsUpdated -= FileTagsSettingsService_OnSettingUpdated;
 			folderSizeProvider.SizeChanged -= FolderSizeProvider_SizeChanged;
 			folderSettings.LayoutModeChangeRequested -= LayoutModeChangeRequested;
+
+			addFilesCTS.Cancel();
+			loadPropsCTS.Cancel();
+			watcherCTS.Cancel();
+			addFilesCTS.Dispose();
+			loadPropsCTS.Dispose();
+			watcherCTS.Dispose();
+			SearchIconBitmapImage = null;
+			currentStorageFolder = null;
 		}
 	}
 
