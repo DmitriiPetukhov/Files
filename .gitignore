@@ -5,6 +5,7 @@
 
 # Custom files
 *.local.*
+.dev/
 Files.App.OpenDialog*.dll
 Files.App.SaveDialog*.dll
 Files.App.Launcher.exe
@@ -29,7 +30,6 @@ mono_crash.*
 [Rr]eleases/
 x64/
 x86/
-[Ww][Ii][Nn]32/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
 bld/

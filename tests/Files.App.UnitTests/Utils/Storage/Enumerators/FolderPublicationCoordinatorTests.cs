@@ -4,13 +4,16 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Utils.Storage;
+using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Files.App.UnitTests;
+namespace Files.App.UnitTests.Utils.Storage.Enumerators;
 
+/// <summary>Verifies coordinated enumeration publication behavior.</summary>
 [TestClass]
 public sealed class FolderPublicationCoordinatorTests
 {
+	/// <summary>Ensures batches and the final result are published in order.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_PublishesAccumulatedBatchesAndAuthoritativeFinalResult()
 	{
@@ -24,7 +27,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		var finalItems = await coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<string>(
+			new CallbackFolderEnumerationSourceStub<string>(
 			[
 				(IReadOnlyCollection<string>)["b", "a"],
 				(IReadOnlyCollection<string>)["d", "c"]
@@ -39,6 +42,7 @@ public sealed class FolderPublicationCoordinatorTests
 		CollectionAssert.AreEqual(new[] { "d", "c", "b", "a" }, finalItems.ToArray());
 	}
 
+	/// <summary>Ensures rebuilding publishes the new sort order.</summary>
 	[TestMethod]
 	public async Task TryRebuildIndexAsync_PublishesNewSortOrder()
 	{
@@ -52,7 +56,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		await coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<string>(
+			new CallbackFolderEnumerationSourceStub<string>(
 				[(IReadOnlyCollection<string>)["b", "a"]],
 				["b", "a"]),
 				CancellationToken.None);
@@ -65,6 +69,7 @@ public sealed class FolderPublicationCoordinatorTests
 		CollectionAssert.AreEqual(new[] { "b", "a" }, snapshots[^1].ToArray());
 	}
 
+	/// <summary>Ensures concurrent source callbacks are serialized.</summary>
 	[TestMethod]
 	public async Task EnumerateAsync_SerializesConcurrentSourceCallbacks()
 	{
@@ -95,7 +100,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		var enumerationTask = coordinator.EnumerateAsync(
-			new ConcurrentFakeFolderEnumerationSource<string>(
+			new ConcurrentFolderEnumerationSourceStub<string>(
 				[
 					(IReadOnlyCollection<string>)["b", "a"],
 					(IReadOnlyCollection<string>)["d", "c"]
@@ -115,6 +120,7 @@ public sealed class FolderPublicationCoordinatorTests
 		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, snapshots[2].ToArray());
 	}
 
+	/// <summary>Ensures rebuilding is serialized with enumeration publication.</summary>
 	[TestMethod]
 	public async Task TryRebuildIndexAsync_SerializesWithEnumerationPublication()
 	{
@@ -136,7 +142,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		var enumerationTask = coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<string>(
+			new CallbackFolderEnumerationSourceStub<string>(
 				[(IReadOnlyCollection<string>)["b", "a"]],
 				["b", "a"]),
 				CancellationToken.None);
@@ -153,6 +159,7 @@ public sealed class FolderPublicationCoordinatorTests
 		CollectionAssert.AreEqual(new[] { "b", "a" }, snapshots[^1].ToArray());
 	}
 
+	/// <summary>Ensures rebuild work does not block the caller.</summary>
 	[TestMethod]
 	public async Task TryRebuildIndexAsync_RunsWithoutBlockingCaller()
 	{
@@ -161,7 +168,7 @@ public sealed class FolderPublicationCoordinatorTests
 			_ => Task.CompletedTask);
 
 		await coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<int>(
+			new CallbackFolderEnumerationSourceStub<int>(
 				[(IReadOnlyCollection<int>)[1, 2, 3]],
 				[1, 2, 3]),
 				CancellationToken.None);
@@ -186,6 +193,7 @@ public sealed class FolderPublicationCoordinatorTests
 		}
 	}
 
+	/// <summary>Ensures cancellation prevents a rebuild publication.</summary>
 	[TestMethod]
 	public async Task TryRebuildIndexAsync_RejectsCancellationDuringRebuild()
 	{
@@ -199,7 +207,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		await coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<int>(
+			new CallbackFolderEnumerationSourceStub<int>(
 				[(IReadOnlyCollection<int>)[1, 2, 3]],
 				[1, 2, 3]),
 				CancellationToken.None);
@@ -227,6 +235,7 @@ public sealed class FolderPublicationCoordinatorTests
 		}
 	}
 
+	/// <summary>Ensures cancellation is idempotent and rejects later callbacks.</summary>
 	[TestMethod]
 	public async Task CancelAsync_IsIdempotentAndRejectsLateSourceCallbacks()
 	{
@@ -243,7 +252,7 @@ public sealed class FolderPublicationCoordinatorTests
 		await coordinator.CancelAsync();
 
 		await coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<string>(
+			new CallbackFolderEnumerationSourceStub<string>(
 				[(IReadOnlyCollection<string>)["a"]],
 				["a"]),
 				CancellationToken.None);
@@ -251,6 +260,7 @@ public sealed class FolderPublicationCoordinatorTests
 		Assert.AreEqual(0, snapshots.Count);
 	}
 
+	/// <summary>Ensures cancellation waits for an active publication.</summary>
 	[TestMethod]
 	public async Task CancelAsync_WaitsForActivePublicationAndRejectsLaterFinalResult()
 	{
@@ -267,7 +277,7 @@ public sealed class FolderPublicationCoordinatorTests
 			});
 
 		var enumerationTask = coordinator.EnumerateAsync(
-			new FakeFolderEnumerationSource<string>(
+			new CallbackFolderEnumerationSourceStub<string>(
 				[(IReadOnlyCollection<string>)["a"]],
 				["a"]),
 			CancellationToken.None);
@@ -282,47 +292,5 @@ public sealed class FolderPublicationCoordinatorTests
 		await enumerationTask;
 
 		Assert.AreEqual(1, snapshots.Count);
-	}
-
-	private sealed class FakeFolderEnumerationSource<T>(
-		IReadOnlyList<IReadOnlyCollection<T>> batches,
-		IReadOnlyCollection<T> finalItems) : IFolderEnumerationSource<T>
-	{
-		public async Task<IReadOnlyCollection<T>> EnumerateAsync(
-			Func<IReadOnlyCollection<T>, Task> publishBatchAsync,
-			CancellationToken cancellationToken)
-		{
-			foreach (var batch in batches)
-				await publishBatchAsync(batch);
-
-			return finalItems;
-		}
-	}
-
-	private sealed class ConcurrentFakeFolderEnumerationSource<T>(
-		IReadOnlyList<IReadOnlyCollection<T>> batches,
-		IReadOnlyCollection<T> finalItems) : IFolderEnumerationSource<T>
-	{
-		public async Task<IReadOnlyCollection<T>> EnumerateAsync(
-			Func<IReadOnlyCollection<T>, Task> publishBatchAsync,
-			CancellationToken cancellationToken)
-		{
-			var publicationTasks = batches
-				.Select(publishBatchAsync)
-				.ToArray();
-
-			await Task.WhenAll(publicationTasks);
-			return finalItems;
-		}
-	}
-
-	private sealed class BlockingComparer(ManualResetEventSlim entered, ManualResetEventSlim release) : Comparer<int>
-	{
-		public override int Compare(int x, int y)
-		{
-			entered.Set();
-			release.Wait();
-			return y.CompareTo(x);
-		}
 	}
 }

@@ -1,14 +1,17 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Extensions;
 using Files.App.Services.SizeProvider;
 using Files.Shared.Helpers;
+using Files.App.Utils.Storage.Enumerators.Win32;
 using System.IO;
 using Windows.Storage;
 using FileAttributes = System.IO.FileAttributes;
 
 namespace Files.App.Utils.Storage
 {
+	/// <summary>Converts native Win32 entries into legacy listed items.</summary>
 	public static class Win32StorageEnumerator
 	{
 		private static readonly ISizeProvider folderSizeProvider = Ioc.Default.GetService<ISizeProvider>();
@@ -17,117 +20,6 @@ namespace Files.App.Utils.Storage
 		private static readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
 
 		private static readonly IconWarmUpQueue iconWarmUpQueue = Ioc.Default.GetRequiredService<IconWarmUpQueue>();
-
-		public static async Task<List<ListedItem>> ListEntries(
-			string path,
-			IntPtr hFile,
-			Win32PInvoke.WIN32_FIND_DATA findData,
-			CancellationToken cancellationToken,
-			int countLimit,
-			Func<List<ListedItem>, Task> intermediateAction
-		)
-		{
-			var sampler = new IntervalSampler(500);
-			var pendingBatch = new List<ListedItem>();
-			var allAcceptedItems = new List<ListedItem>();
-			var count = 0;
-			var stoppedBeforeFindNext = false;
-
-			IUserSettingsService userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
-			bool CalculateFolderSizes = userSettingsService.FoldersSettingsService.CalculateFolderSizes;
-			bool showHiddenItems = userSettingsService.FoldersSettingsService.ShowHiddenItems;
-			bool showProtectedSystemFiles = userSettingsService.FoldersSettingsService.ShowProtectedSystemFiles;
-			bool showDotFiles = userSettingsService.FoldersSettingsService.ShowDotFiles;
-			bool areAlternateStreamsVisible = userSettingsService.FoldersSettingsService.AreAlternateStreamsVisible;
-
-			var isGitRepo = GitHelpers.IsRepositoryEx(path, out var repoPath) && !string.IsNullOrEmpty((await GitHelpers.GetRepositoryHead(repoPath))?.Name);
-
-			try
-			{
-				do
-				{
-					var isSystem = ((FileAttributes)findData.dwFileAttributes & FileAttributes.System) == FileAttributes.System;
-					var isHidden = ((FileAttributes)findData.dwFileAttributes & FileAttributes.Hidden) == FileAttributes.Hidden;
-					var startWithDot = findData.cFileName.StartsWith('.');
-					if ((!isHidden ||
-						(showHiddenItems &&
-						(!isSystem || showProtectedSystemFiles))) &&
-						(!startWithDot || showDotFiles))
-					{
-						if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) != FileAttributes.Directory)
-						{
-							var file = await GetFile(findData, path, isGitRepo, cancellationToken);
-							if (file is not null)
-							{
-								pendingBatch.Add(file);
-								allAcceptedItems.Add(file);
-								++count;
-								iconWarmUpQueue.TryQueue(file, false, cancellationToken);
-
-								if (areAlternateStreamsVisible)
-								{
-									var alternateStreams = EnumAdsForPath(file.ItemPath, file).ToList();
-									pendingBatch.AddRange(alternateStreams);
-									allAcceptedItems.AddRange(alternateStreams);
-								}
-							}
-						}
-						else if (((FileAttributes)findData.dwFileAttributes & FileAttributes.Directory) == FileAttributes.Directory)
-						{
-							if (findData.cFileName != "." && findData.cFileName != "..")
-							{
-								var folder = await GetFolder(findData, path, isGitRepo, cancellationToken);
-								if (folder is not null)
-								{
-									pendingBatch.Add(folder);
-									allAcceptedItems.Add(folder);
-									++count;
-									iconWarmUpQueue.TryQueue(folder, true, cancellationToken);
-
-									if (areAlternateStreamsVisible)
-									{
-										var alternateStreams = EnumAdsForPath(folder.ItemPath, folder).ToList();
-										pendingBatch.AddRange(alternateStreams);
-										allAcceptedItems.AddRange(alternateStreams);
-									}
-
-									if (CalculateFolderSizes)
-									{
-										if (folderSizeProvider.TryGetSize(folder.ItemPath, out var size))
-										{
-											folder.FileSizeBytes = (long)size;
-											folder.FileSize = size.ToSizeString();
-										}
-
-										_ = folderSizeProvider.UpdateAsync(folder.ItemPath, cancellationToken);
-									}
-								}
-							}
-						}
-					}
-
-					if (cancellationToken.IsCancellationRequested || count == countLimit)
-					{
-						stoppedBeforeFindNext = true;
-						break;
-					}
-
-					if (intermediateAction is not null && pendingBatch.Count > 0 && (count == 32 || sampler.CheckNow()))
-					{
-						await intermediateAction(pendingBatch);
-
-						// clear the temporary list every time we do an intermediate action
-						pendingBatch.Clear();
-					}
-				} while (Win32PInvoke.FindNextFile(hFile, out findData));
-
-				return allAcceptedItems;
-			}
-			finally
-			{
-				Win32PInvoke.FindClose(hFile);
-			}
-		}
 
 		private static IEnumerable<ListedItem> EnumAdsForPath(string itemPath, ListedItem main)
 		{
@@ -285,7 +177,6 @@ namespace Files.App.Utils.Storage
 			}
 
 			bool itemThumbnailImgVis = false;
-			bool itemEmptyImgVis = true;
 
 			if (cancellationToken.IsCancellationRequested)
 				return null;
@@ -406,7 +297,7 @@ namespace Files.App.Utils.Storage
 					};
 				}
 			}
-			else if (App.LibraryManager.TryGetLibrary(itemPath, out LibraryLocationItem library))
+			else if (App.LibraryManager is not null && App.LibraryManager.TryGetLibrary(itemPath, out LibraryLocationItem library))
 			{
 				return new LibraryItem(library)
 				{

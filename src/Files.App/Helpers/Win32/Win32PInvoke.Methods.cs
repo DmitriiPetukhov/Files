@@ -198,11 +198,20 @@ namespace Files.App.Helpers
 			out ushort nativeMachine
 		);
 
-		[DllImport("api-ms-win-core-file-l1-1-0.dll", CharSet = CharSet.Unicode)]
-		public static extern bool FindNextFile(
+		#pragma warning disable SYSLIB1054 // WIN32_FIND_DATA uses the existing managed marshalling layout.
+		[DllImport("api-ms-win-core-file-l1-1-0.dll", EntryPoint = "FindNextFileW", SetLastError = true, CharSet = CharSet.Unicode)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool FindNextFileNative(
 			IntPtr hFindFile,
 			out WIN32_FIND_DATA lpFindFileData
 		);
+		#pragma warning restore SYSLIB1054
+
+		public static bool FindNextFile(
+			IntPtr hFindFile,
+			out WIN32_FIND_DATA lpFindFileData
+		)
+			=> FindNextFileNative(hFindFile, out lpFindFileData);
 
 		[DllImport("api-ms-win-core-file-l1-1-0.dll")]
 		public static extern bool FindClose(

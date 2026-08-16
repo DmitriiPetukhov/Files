@@ -4,17 +4,20 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Utils.Storage;
+using Files.App.UnitTests.TestDoubles.Utils.Storage.Enumerators;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Files.App.UnitTests;
+namespace Files.App.UnitTests.Utils.Storage.Enumerators.Integration;
 
+/// <summary>Verifies publication session integration with an enumeration source.</summary>
 [TestClass]
 public sealed class FolderPublicationSessionIntegrationTests
 {
+	/// <summary>Ensures source batches and final results share one publication session.</summary>
 	[TestMethod]
-	public async Task SourceBatchesAndFinalResultUseOnePublicationSession()
+	public async Task EnumerateAsync_UsesOnePublicationSessionForSourceBatchesAndFinalResult()
 	{
-		var source = new FakeFolderEnumerationSource<string>(
+		var source = new CallbackFolderEnumerationSourceStub<string>(
 		[
 			(IReadOnlyCollection<string>)["b", "a"],
 			(IReadOnlyCollection<string>)["d", "c"]
@@ -34,22 +37,5 @@ public sealed class FolderPublicationSessionIntegrationTests
 		CollectionAssert.AreEqual(new[] { "a", "b" }, publishedSnapshots[0].ToArray());
 		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, publishedSnapshots[1].ToArray());
 		CollectionAssert.AreEqual(new[] { "a", "b", "c", "d" }, finalSnapshot!.ToArray());
-	}
-
-	private sealed class FakeFolderEnumerationSource<T>(IReadOnlyList<IReadOnlyCollection<T>> batches, IReadOnlyCollection<T> finalItems)
-		: IFolderEnumerationSource<T>
-	{
-		public async Task<IReadOnlyCollection<T>> EnumerateAsync(
-			Func<IReadOnlyCollection<T>, Task> publishBatchAsync,
-			CancellationToken cancellationToken)
-		{
-			foreach (var batch in batches)
-			{
-				cancellationToken.ThrowIfCancellationRequested();
-				await publishBatchAsync(batch);
-			}
-
-			return finalItems;
-		}
 	}
 }

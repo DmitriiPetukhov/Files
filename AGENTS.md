@@ -4,8 +4,10 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 
 - Protect context usage. Any command with unknown or potentially large output must be capped. Prefer targeted commands such as `rg`, `Get-Content -TotalCount`, `Select-Object -First`, or focused `git diff -- <path>`; for example, `COMMAND 2>&1 | Select-Object -First 200`. If a line cap is still too noisy, narrow the query instead of dumping full output.
 - Always follow `.editorconfig`
+- In potentially large loops, reuse typed array pools instead of allocating arrays or temporary collections per iteration; preseed a reasonable capacity, return rented buffers in `finally`, clear references before reuse, and provide a bounded fallback for capacity overruns to limit GC pressure.
 - Keep changed text files in CRLF line endings
 - Keep comments concise and useful. Do not add comments that restate obvious code.
+- Add brief XML documentation to classes, interfaces, methods, and other important elements. State their purpose without describing implementation details; one or two lines is usually enough.
 - Never read entire generated files in `bin` or `obj` unless the generated source is directly needed.
 - Prefer targeted search over full file reads.
 - Touch only what you must. Clean up only files you created or changed for the task.
@@ -17,6 +19,7 @@ This project is a C#/.NET WinUI 3 desktop app; an alternative to File Explorer.
 - For UI work, use existing XAML resources, controls, converters, commands, and localization patterns. Avoid one-off styles or hard-coded user-visible strings.
 - Start by identifying the smallest relevant project, feature area, and files for the task.
 - Read nearby code before adding new abstractions. Prefer existing WinUI, MVVM, service, command, and storage patterns.
+- Keep each class in its own file named after the class; place the file under the semantic namespace path, and make the namespace match the class's purpose and domain.
 - Keep implementation scoped to the requested behavior. Avoid opportunistic refactors, formatting churn, dependency updates, and generated file edits.
 - Treat tool output as evidence. When behavior changes, run the focused build that can prove it and report anything left unverified.
 
@@ -83,6 +86,8 @@ The package is emitted under `src/Files.App/AppPackages/Signed/`. Verify the cer
 We currently don't have a suitable set of tests for AI agents. Just make sure that the builds succeed.
 
 ## Commit & Push
+
+After all changes and before every commit, run the affected build with warnings visible (not `-clp:ErrorsOnly`) and run `dotnet format analyzers` for the affected project; fix diagnostics in changed code.
 
 When asked to commit, run these commands beforehand:
 
